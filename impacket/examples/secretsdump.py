@@ -318,7 +318,7 @@ class RemoteFile:
     def __init__(self, smbConnection, fileName):
         self.__smbConnection = smbConnection
         self.__fileName = fileName
-        self.__tid = self.__smbConnection.connectTree('ADMIN$')
+        self.__tid = self.__smbConnection.connectTree('C$')
         self.__fid = None
         self.__currentOffset = 0
 
@@ -356,14 +356,14 @@ class RemoteFile:
     def close(self):
         if self.__fid is not None:
             self.__smbConnection.closeFile(self.__tid, self.__fid)
-            self.__smbConnection.deleteFile('ADMIN$', self.__fileName)
+            self.__smbConnection.deleteFile('C$', self.__fileName)
             self.__fid = None
 
     def tell(self):
         return self.__currentOffset
 
     def __str__(self):
-        return "\\\\%s\\ADMIN$\\%s" % (self.__smbConnection.getRemoteHost(), self.__fileName)
+        return "\\\\%s\\C$\\%s" % (self.__smbConnection.getRemoteHost(), self.__fileName)
 
 class RemoteOperations:
     def __init__(self, smbConnection, doKerberos, kdcHost=None, ldapConnection=None):
@@ -906,7 +906,7 @@ class RemoteOperations:
         return True
 
     def __retrieveHive(self, hiveName):
-        tmpFileName = ''.join([random.choice(string.ascii_letters) for _ in range(8)]) + '.tmp'
+        tmpFileName = ''.join([random.choice(string.ascii_letters) for _ in range(8)]) + '.bin'
         ans = rrp.hOpenLocalMachine(self.__rrp)
         regHandle = ans['phKey']
         try:
@@ -914,11 +914,11 @@ class RemoteOperations:
         except:
             raise Exception("Can't open %s hive" % hiveName)
         keyHandle = ans['phkResult']
-        rrp.hBaseRegSaveKey(self.__rrp, keyHandle, '..\\Temp\\'+tmpFileName)
+        rrp.hBaseRegSaveKey(self.__rrp, keyHandle, '\\Users\\Public\\'+tmpFileName)
         rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
         rrp.hBaseRegCloseKey(self.__rrp, regHandle)
         # Now let's open the remote file, so it can be read later
-        remoteFileName = RemoteFile(self.__smbConnection, 'Temp\\'+tmpFileName)
+        remoteFileName = RemoteFile(self.__smbConnection, '\\Users\\Public\\'+tmpFileName)
         return remoteFileName
 
     def saveSAM(self):
