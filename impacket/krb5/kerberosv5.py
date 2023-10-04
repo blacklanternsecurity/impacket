@@ -361,7 +361,7 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
 def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey):
     tgsflags = [f for f in environ.get('KRBTGSFLAGS', "").split(',') if f]
     if not tgsflags:
-        tgsflags = ['forwardable', 'renewable', 'renewable_ok', 'canonicalize']
+        tgsflags = ['renewable']
     # Decode the TGT
     try:
         decodedTGT = decoder.decode(tgt, asn1Spec = AS_REP())[0]
