@@ -301,7 +301,7 @@ class GetUserSPNs:
 
         searchFilter = "(&"
         searchFilter += "(" + filter_person + ")"
-        searchFilter += "(" + filter_not_disabled + ")"
+        #searchFilter += "(" + filter_not_disabled + ")"
 
         if self.__stealth is True:
             logging.warning('Stealth option may cause huge memory consumption / out-of-memory errors on very large domains.')
