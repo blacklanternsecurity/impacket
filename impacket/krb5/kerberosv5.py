@@ -367,7 +367,7 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
 
     return tgt, cipher, key, sessionKey
 
-def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey):
+def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey, renew = False):
     tgsflags = [f for f in environ.get('KRBTGSFLAGS', "").split(',') if f]
     if not tgsflags:
         tgsflags = ['renewable']
