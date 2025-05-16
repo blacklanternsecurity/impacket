@@ -73,6 +73,11 @@ def _get_machine_name(machine, fqdn=False):
     s = SMBConnection(machine, machine)
     try:
         s.login('', '')
+    except SessionError as e:
+        if str(e).find('STATUS_NOT_SUPPORTED') > 0:
+            raise Exception('The SMB request is not supported. Probably NTLM is disabled. Try to specify corresponding NetBIOS name or FQDN as the value of the -dc-host option')
+        else:
+            raise
     except Exception:
         if s.getServerName() == '':
             raise Exception('Error while anonymous logging into %s' % machine)
@@ -230,14 +235,11 @@ def _init_ldap_connection(target, tls_version, domain, username, password, lmhas
 
     return ldap_server, ldap_session
 
-def init_ldap_session(domain, username, password, lmhash, nthash, k, dc_ip, aesKey, use_ldaps):
-    """
-        k           (bool)  : use Kerberos authentication
-        dc_ip       (string): ip of the domain controller
-        use_ldaps   (boold) : SSL Ldap or Ldap
-    """
+def init_ldap_session(domain, username, password, lmhash, nthash, k, dc_ip, dc_host, aesKey, use_ldaps):
     if k:
-        if dc_ip is not None:
+        if dc_host is not None:
+            target = _get_machine_name(dc_host)
+        elif dc_ip is not None:
             target = _get_machine_name(dc_ip)
         else:
             target = _get_machine_name(domain)
@@ -259,7 +261,7 @@ def init_ldap_session(domain, username, password, lmhash, nthash, k, dc_ip, aesK
 
 from impacket.ldap import ldap
 import logging
-def ldap_login(target, base_dn, kdc_ip, kdc_host, do_kerberos, username, password, domain, lmhash, nthash, aeskey, target_domain=None, fqdn=False):
+def ldap_login(target, base_dn, kdc_ip, kdc_host, do_kerberos, username, password, domain, lmhash, nthash, aeskey, ldaps_flag=False, target_domain=None, fqdn=False):
     if kdc_host is not None and (target_domain is None or domain == target_domain):
         target = kdc_host
     else:
@@ -274,10 +276,13 @@ def ldap_login(target, base_dn, kdc_ip, kdc_host, do_kerberos, username, passwor
         if do_kerberos:
             logging.info('Getting machine hostname')
             target = _get_machine_name(target, fqdn)
+    
+    # Added ldaps flag & placed check for ldaps if flag is enabled.
+    url = 'ldaps://%s' if ldaps_flag else 'ldap://%s'
 
     # Connect to LDAP
     try:
-        ldapConnection = ldap.LDAPConnection('ldap://%s' % target, base_dn, kdc_ip)
+        ldapConnection = ldap.LDAPConnection(url % target, base_dn, kdc_ip)
         if do_kerberos is not True:
             ldapConnection.login(username, password, domain, lmhash, nthash)
         else:
