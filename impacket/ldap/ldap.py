@@ -25,6 +25,7 @@ import logging
 from pyasn1.codec.ber import encoder, decoder
 from pyasn1.codec.ber.decoder import SubstrateUnderrunError
 from pyasn1.error import PyAsn1Error
+from pyasn1.type.univ import noValue
 
 from impacket import LOG
 from impacket.ldap.ldapasn1 import Filter, Control, SimplePagedResultsControl, ResultCode, Scope, DerefAliases, Operation, \
