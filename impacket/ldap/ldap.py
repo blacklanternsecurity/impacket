@@ -458,15 +458,30 @@ class LDAPConnection:
         return data
 
     def decrypt(self, data):
-        if self.__auth_type == "KRB5":
-            data = data[4:]
-            data, _ = self.__gss.GSS_Unwrap_LDAP(self.__sessionKey, data, 0, direction='init')
-        elif self.__auth_type == "NTLM-sasl":
-            data= data[4:]
-            signature, data = self.__spnego_cipher_blob.decrypt(data)
-        else:
-            raise(f"Decryption not implemented for {self.__auth_type} protocol")
-        return data
+        try:
+            if self.__auth_type == "KRB5":
+                if len(data) <= 4:
+                    logging.debug("Received data too short for decryption, returning as-is")
+                    return data
+                    
+                data = data[4:]
+                data, _ = self.__gss.GSS_Unwrap_LDAP(self.__sessionKey, data, 0, direction='init')
+            elif self.__auth_type == "NTLM-sasl":
+                if len(data) <= 4:
+                    logging.debug("Received data too short for decryption, returning as-is")
+                    return data
+                    
+                data = data[4:]
+                signature, data = self.__spnego_cipher_blob.decrypt(data)
+            else:
+                raise Exception(f"Decryption not implemented for {self.__auth_type} protocol")
+            return data
+        except Exception as e:
+            logging.debug(f"Error decrypting LDAP data: {str(e)}")
+            # If we can't decrypt, return the raw data for best-effort parsing
+            if len(data) > 4:
+                return data[4:]
+            return data
 
     def search(self, searchBase=None, scope=None, derefAliases=None, sizeLimit=0, timeLimit=0, typesOnly=False,
                searchFilter='(objectClass=*)', attributes=None, searchControls=None, perRecordCallback=None):

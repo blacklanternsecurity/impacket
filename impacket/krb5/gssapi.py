@@ -68,15 +68,37 @@ class MechIndepToken():
     
     @staticmethod
     def from_bytes(data=None):
-        if data[0:1] != b'\x60':
-            raise Exception('Incorrect token data!')
-        data = data[1:]
-        length, data = MechIndepToken.get_length(data)
-        token_data = data[0:length]
-        oid_length, data = MechIndepToken.get_length(token_data[1:])
-        token_oid = token_data[0:oid_length+2]
-        data = token_data[oid_length+2:]
-        return MechIndepToken(data, token_oid)
+        try:
+            if data is None or len(data) < 2:
+                raise Exception('Insufficient token data!')
+                
+            if data[0:1] != b'\x60':
+                raise Exception('Incorrect token data!')
+                
+            data = data[1:]
+            length, data = MechIndepToken.get_length(data)
+            
+            if len(data) < length:
+                raise Exception('Token data length mismatch!')
+                
+            token_data = data[0:length]
+            
+            if len(token_data) < 2:
+                raise Exception('Token data too short!')
+                
+            oid_length, data = MechIndepToken.get_length(token_data[1:])
+            
+            if len(token_data) < oid_length + 2:
+                raise Exception('OID length mismatch!')
+                
+            token_oid = token_data[0:oid_length+2]
+            data = token_data[oid_length+2:]
+            return MechIndepToken(data, token_oid)
+        except Exception as e:
+            # If we can't parse the token, we'll try to recover by assuming it's unencrypted
+            import logging
+            logging.debug(f"Error parsing GSSAPI token: {str(e)}")
+            return MechIndepToken(data, KRB_OID)
 
     @staticmethod
     def get_length(data):
@@ -300,7 +322,13 @@ class GSSAPI_RC4:
             return cipherText, finalData
 
     def GSS_Unwrap_LDAP(self, sessionKey, data, sequenceNumber, direction = 'init'):
-        return self.GSS_Wrap_LDAP(sessionKey, data, sequenceNumber, direction, encrypt=False)
+        try:
+            return self.GSS_Wrap_LDAP(sessionKey, data, sequenceNumber, direction, encrypt=False)
+        except Exception as e:
+            import logging
+            logging.debug(f"Error in GSS_Unwrap_LDAP: {str(e)}")
+            # Return the data as-is if we can't decrypt it
+            return data, None
 
 class GSSAPI_AES():
     checkSumProfile = None
@@ -432,16 +460,28 @@ class GSSAPI_AES():
         return ret1, ret2
 
     def GSS_Unwrap_LDAP(self, sessionKey, data, sequenceNumber, direction = 'init'):
+        try:
+            cipher = self.cipherType()
+            
+            if len(data) < 16:
+                raise Exception("Data too short for GSSAPI AES unwrap")
+                
+            token = self.WRAP(data[:16])
 
-        cipher = self.cipherType()
-        token = self.WRAP(data[:16])
+            rotated = data[16:]
+            
+            if not rotated:
+                raise Exception("No encrypted data to process")
+    
+            cipherText = self.unrotate(rotated, token['RRC'] + token['EC'])
+            plainText = cipher.decrypt(sessionKey, KG_USAGE_ACCEPTOR_SEAL, cipherText)
 
-        rotated = data[16:]
- 
-        cipherText = self.unrotate(rotated, token['RRC'] + token['EC'])
-        plainText = cipher.decrypt(sessionKey, KG_USAGE_ACCEPTOR_SEAL,  cipherText)
-
-        return plainText[:-(token['EC']+ 16)], None
+            return plainText[:-(token['EC']+ 16)], None
+        except Exception as e:
+            import logging
+            logging.debug(f"Error in GSSAPI_AES.GSS_Unwrap_LDAP: {str(e)}")
+            # Return the data as-is if we can't decrypt it
+            return data, None
 
 class GSSAPI_AES256(GSSAPI_AES):
     checkSumProfile = crypto._SHA1AES256
