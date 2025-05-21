@@ -1,36 +1,30 @@
-# Impacket - Collection of Python classes for working with network protocols.
-#
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+#!/usr/bin/env python
+# SECUREAUTH LABS. Copyright 2019 SecureAuth Corporation. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
 # for more information.
 #
-# Description:
-#   RFC 4511 Minimalistic implementation. We don't need much functionality yet
-#   If we need more complex use cases we might opt to use a third party implementation
-#   Keep in mind the APIs are still unstable, might require to re-write your scripts
-#   as we change them.
-#   Adding [MS-ADTS] specific functionality
+# Author: Alberto Solino (@agsolino)
 #
-# Authors:
-#   Alberto Solino (@agsolino)
-#   Kacper Nowak (@kacpern)
+# Description:
+#   RFC 4511 LDAP client implementation
 #
 # ToDo:
-#   [x] Implement Paging Search, especially important for big requests
+#   [x] Implement a exception hierarchy
 #
-
 import re
 import socket
+import os
+import random
+import string
 from binascii import unhexlify
 import random
+import logging
 
 from pyasn1.codec.ber import encoder, decoder
-from pyasn1.error import SubstrateUnderrunError
-from pyasn1.type.univ import noValue
+from pyasn1.codec.ber.decoder import SubstrateUnderrunError
+from pyasn1.error import PyAsn1Error
 
 from impacket import LOG
 from impacket.ldap.ldapasn1 import Filter, Control, SimplePagedResultsControl, ResultCode, Scope, DerefAliases, Operation, \
@@ -577,6 +571,27 @@ class LDAPConnection:
             except SubstrateUnderrunError:
                 # We need more data
                 remaining = data + self._socket.recv(REQUEST_SIZE)
+            except Exception as e:
+                if 'not in asn1Spec' in str(e):
+                    # Skip this problematic portion of data
+                    logging.debug("ASN.1 decoding error, skipping data chunk: %s", str(e))
+                    # Try to move forward 1 byte at a time until we find a valid ASN.1 structure
+                    found = False
+                    for i in range(1, len(data)):
+                        try:
+                            message, remaining = decoder.decode(data[i:], asn1Spec=LDAPMessage())
+                            data = data[i:]
+                            found = True
+                            break
+                        except:
+                            continue
+                    if not found:
+                        # If we can't decode anything, just return what we have so far
+                        return response
+                    # Continue processing with the new data position
+                else:
+                    # Re-raise other exceptions
+                    raise
             else:
                 if message['messageID'] == 0:  # unsolicited notification
                     name = message['protocolOp']['extendedResp']['responseName'] or message['responseName']
