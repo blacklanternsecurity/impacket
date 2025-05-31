@@ -269,7 +269,9 @@ class LDAPConnection:
 
         # If TLS is used, setup channel binding
         
-        if self._SSL and self.__channel_binding_value is not None:
+        if self._SSL:
+            if self.__channel_binding_value is None:
+                self.__channel_binding_value = self.generateChannelBindingValue()
             chkField['Bnd'] = self.__channel_binding_value
         if self.__signing:
             chkField['Flags'] |= GSS_C_CONF_FLAG
