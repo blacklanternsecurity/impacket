@@ -39,33 +39,47 @@ from impacket.ldap.ldapasn1 import Filter, Control, SimplePagedResultsControl, R
     SearchResultDone, LDAPMessage
 from impacket.ntlm import getNTLMSSPType1, getNTLMSSPType3, VERSION, hmac_md5, NTLMAuthChallenge
 from impacket.spnego import SPNEGO_NegTokenInit, SPNEGO_NegTokenResp, SPNEGOCipher, TypesMech
+import contextlib
 
 try:
-    import OpenSSL
-    from OpenSSL import SSL, crypto
+    from OpenSSL import SSL
 except:
     LOG.critical("pyOpenSSL is not installed, can't continue")
     raise
 
 __all__ = [
-    'LDAPConnection', 'LDAPFilterSyntaxError', 'LDAPFilterInvalidException', 'LDAPSessionError', 'LDAPSearchError',
-    'Control', 'SimplePagedResultsControl', 'ResultCode', 'Scope', 'DerefAliases', 'Operation',
-    'CONTROL_PAGEDRESULTS', 'KNOWN_CONTROLS', 'NOTIFICATION_DISCONNECT', 'KNOWN_NOTIFICATIONS',
+    'CONTROL_PAGEDRESULTS',
+    'KNOWN_CONTROLS',
+    'KNOWN_NOTIFICATIONS',
+    'NOTIFICATION_DISCONNECT',
+    'Control',
+    'DerefAliases',
+    'LDAPConnection',
+    'LDAPFilterInvalidException',
+    'LDAPFilterSyntaxError',
+    'LDAPSearchError',
+    'LDAPSessionError',
+    'Operation',
+    'ResultCode',
+    'Scope',
+    'SimplePagedResultsControl',
 ]
 
 # https://tools.ietf.org/search/rfc4515#section-3
 DESCRIPTION = r'(?:[a-z][a-z0-9\-]*)'
 NUMERIC_OID = r'(?:(?:\d|[1-9]\d+)(?:\.(?:\d|[1-9]\d+))*)'
-OID = r'(?:%s|%s)' % (DESCRIPTION, NUMERIC_OID)
+OID = rf'(?:{DESCRIPTION}|{NUMERIC_OID})'
 OPTIONS = r'(?:(?:;[a-z0-9\-]+)*)'
-ATTRIBUTE = r'(%s%s)' % (OID, OPTIONS)
+ATTRIBUTE = rf'({OID}{OPTIONS})'
 DN = r'(:dn)'
-MATCHING_RULE = r'(?::(%s))' % OID
+MATCHING_RULE = rf'(?::({OID}))'
 
 RE_OPERATOR = re.compile(r'([:<>~]?=)')
-RE_ATTRIBUTE = re.compile(r'^%s$' % ATTRIBUTE, re.I)
-RE_EX_ATTRIBUTE_1 = re.compile(r'^%s%s?%s?$' % (ATTRIBUTE, DN, MATCHING_RULE), re.I)
-RE_EX_ATTRIBUTE_2 = re.compile(r'^(){0}%s?%s$' % (DN, MATCHING_RULE), re.I)
+RE_ATTRIBUTE = re.compile(rf'^{ATTRIBUTE}$', re.I)
+RE_EX_ATTRIBUTE_1 = re.compile(rf'^{ATTRIBUTE}{DN}?{MATCHING_RULE}?$', re.I)
+RE_EX_ATTRIBUTE_2 = re.compile(rf'^(){{0}}{DN}?{MATCHING_RULE}$', re.I)
+
+MAX_INT32 = 2**31 - 1
 
 
 class LDAPConnection:
@@ -102,12 +116,12 @@ class LDAPConnection:
             self.__signing = False
             self._dstHost = url[5:]
         else:
-            raise LDAPSessionError(errorString="Unknown URL prefix: '%s'" % url)
+            raise LDAPSessionError(errorString=f"Unknown URL prefix: '{url}'")
 
         self.__binded = False
         self.__channel_binding_value = None
 
-        ### SASL Auth LDAP Signing arguments
+        # SASL Auth LDAP Signing arguments
         self.sequenceNumber = 0
         
         # Kerberos
@@ -119,24 +133,21 @@ class LDAPConnection:
         self.__spnego_cipher_blob = None
 
         # Try to connect
-        if self._dstIp is not None:
-            targetHost = self._dstIp
-        else:
-            targetHost = self._dstHost
+        targetHost = self._dstIp if self._dstIp is not None else self._dstHost
 
-        LOG.debug('Connecting to %s, port %d, SSL %s, signing %s' % (targetHost, self._dstPort, self._SSL, self.__signing))
+        LOG.debug(f"Connecting to {targetHost}, port {self._dstPort}, SSL {self._SSL}, signing {self.__signing}")
         try:
             af, socktype, proto, _, sa = socket.getaddrinfo(targetHost, self._dstPort, 0, socket.SOCK_STREAM)[0]
             self._socket = socket.socket(af, socktype, proto)
-        except socket.error as e:
-            raise socket.error('Connection error (%s:%d)' % (targetHost, self._dstPort), e)
+        except OSError as e:
+            raise OSError(f"Connection error ({targetHost}:{self._dstPort})") from e
 
-        if self._SSL is False:
+        if not self._SSL:
             self._socket.connect(sa)
         else:
             # Switching to TLS now
             ctx = SSL.Context(SSL.TLS_METHOD)
-            ctx.set_cipher_list('ALL:@SECLEVEL=0'.encode('utf-8'))
+            ctx.set_cipher_list(b'ALL:@SECLEVEL=0')
             SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = 0x00040000
             ctx.set_options(SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION)
             self._socket = SSL.Connection(ctx, self._socket)
@@ -150,12 +161,12 @@ class LDAPConnection:
             peer_cert_digest_bytes = bytes.fromhex(peer_cert_digest_str.replace(':', ''))
         
             channel_binding_struct = b''
-            initiator_address = b'\x00'*8
-            acceptor_address = b'\x00'*8
+            initiator_address = b'\x00' * 8
+            acceptor_address = b'\x00' * 8
 
             # https://datatracker.ietf.org/doc/html/rfc5929#section-4
             application_data_raw = b'tls-server-end-point:' + peer_cert_digest_bytes
-            len_application_data = len(application_data_raw).to_bytes(4, byteorder='little', signed = False)
+            len_application_data = len(application_data_raw).to_bytes(4, byteorder='little', signed=False)
             application_data = len_application_data
             application_data += application_data_raw
             channel_binding_struct += initiator_address
@@ -166,7 +177,7 @@ class LDAPConnection:
     def kerberosLogin(self, user, password, domain='', lmhash='', nthash='', aesKey='', kdcHost=None, TGT=None,
                       TGS=None, useCache=True):
         """
-        logins into the target system explicitly using Kerberos. Hashes are used if RC4_HMAC is supported.
+        Logins into the target system explicitly using Kerberos. Hashes are used if RC4_HMAC is supported.
 
         :param string user: username
         :param string password: password for the user
@@ -181,7 +192,6 @@ class LDAPConnection:
 
         :return: True, raises a LDAPSessionError if error.
         """
-
         if lmhash != '' or nthash != '':
             if len(lmhash) % 2:
                 lmhash = '0' + lmhash
@@ -205,7 +215,7 @@ class LDAPConnection:
         if TGT is not None or TGS is not None:
             useCache = False
 
-        targetName = 'ldap/%s' % self._dstHost
+        targetName = f'ldap/{self._dstHost}'
         if useCache:
             domain, user, TGT, TGS = CCache.parseFile(domain, user, targetName)
 
@@ -268,10 +278,7 @@ class LDAPConnection:
         chkField['Flags'] = GSS_C_SEQUENCE_FLAG | GSS_C_REPLAY_FLAG
 
         # If TLS is used, setup channel binding
-        
-        if self._SSL:
-            if self.__channel_binding_value is None:
-                self.__channel_binding_value = self.generateChannelBindingValue()
+        if self._SSL and self.__channel_binding_value is not None:
             chkField['Bnd'] = self.__channel_binding_value
         if self.__signing:
             chkField['Flags'] |= GSS_C_CONF_FLAG
@@ -302,7 +309,7 @@ class LDAPConnection:
         response = self.sendReceive(bindRequest)[0]['protocolOp']
         if response['bindResponse']['resultCode'] != ResultCode('success'):
             raise LDAPSessionError(
-                errorString='Error in bindRequest -> %s: %s' % (response['bindResponse']['resultCode'].prettyPrint(),
+                errorString='Error in bindRequest -> {}: {}'.format(response['bindResponse']['resultCode'].prettyPrint(),
                                                                 response['bindResponse']['diagnosticMessage'])
             )
         
@@ -317,7 +324,7 @@ class LDAPConnection:
 
     def login(self, user='', password='', domain='', lmhash='', nthash='', authenticationChoice='sasl'):
         """
-        logins into the target system
+        Logins into the target system
 
         :param string user: username
         :param string password: password for the user
@@ -365,8 +372,7 @@ class LDAPConnection:
             response = self.sendReceive(bindRequest)[0]['protocolOp']
             if response['bindResponse']['resultCode'] != ResultCode('success'):
                 raise LDAPSessionError(
-                    errorString='Error in bindRequest during the NTLMAuthNegotiate request -> %s: %s' %
-                                (response['bindResponse']['resultCode'].prettyPrint(),
+                    errorString='Error in bindRequest during the NTLMAuthNegotiate request -> {}: {}'.format(response['bindResponse']['resultCode'].prettyPrint(),
                                  response['bindResponse']['diagnosticMessage'])
                 )
 
@@ -409,8 +415,7 @@ class LDAPConnection:
             response = self.sendReceive(bindRequest)[0]['protocolOp']
             if response['bindResponse']['resultCode'] != ResultCode('saslBindInProgress'):
                 raise LDAPSessionError(
-                    errorString='Error in bindRequest during the NTLMAuthNegotiate request -> %s: %s' %
-                                (response['bindResponse']['resultCode'].prettyPrint(),
+                    errorString='Error in bindRequest during the NTLMAuthNegotiate request -> {}: {}'.format(response['bindResponse']['resultCode'].prettyPrint(),
                                  response['bindResponse']['diagnosticMessage'])
                 )
 
@@ -440,12 +445,11 @@ class LDAPConnection:
             bindRequest['authentication']['sasl']['credentials'] = blob.getData()
             response = self.sendReceive(bindRequest)[0]['protocolOp']
         else:
-            raise LDAPSessionError(errorString="Unknown authenticationChoice: '%s'" % authenticationChoice)
+            raise LDAPSessionError(errorString=f"Unknown authenticationChoice: '{authenticationChoice}'")
 
         if response['bindResponse']['resultCode'] != ResultCode('success'):
             raise LDAPSessionError(
-                errorString='Error in bindRequest -> %s: %s' % (response['bindResponse']['resultCode'].prettyPrint(),
-                                                                response['bindResponse']['diagnosticMessage'])
+                errorString=f"Error in bindRequest -> {response['bindResponse']['resultCode'].prettyPrint()}: {response['bindResponse']['diagnosticMessage']}"
             )
         
         self.__auth_type = f"NTLM-{authenticationChoice}"
@@ -456,13 +460,13 @@ class LDAPConnection:
         if self.__auth_type == "KRB5":
             data, signature = self.__gss.GSS_Wrap_LDAP(self.__sessionKey, data, self.sequenceNumber)
             data = signature + data
-            data = len(data).to_bytes(4, byteorder = 'big', signed = False) + data
+            data = len(data).to_bytes(4, byteorder='big', signed=False) + data
         elif self.__auth_type == "NTLM-sasl":
             signature, data = self.__spnego_cipher_blob.encrypt(data)
             data = signature.getData() + data
-            data = len(data).to_bytes(4, byteorder = 'big', signed = False) + data
+            data = len(data).to_bytes(4, byteorder='big', signed=False) + data
         else:
-            raise(f"Encryption not implemented for {self.__auth_type} protocol")
+            raise NotImplementedError(f"Encryption not implemented for {self.__auth_type} protocol")
         return data
 
     def decrypt(self, data):
@@ -470,10 +474,10 @@ class LDAPConnection:
             data = data[4:]
             data, _ = self.__gss.GSS_Unwrap_LDAP(self.__sessionKey, data, 0, direction='init')
         elif self.__auth_type == "NTLM-sasl":
-            data= data[4:]
+            data = data[4:]
             signature, data = self.__spnego_cipher_blob.decrypt(data)
         else:
-            raise(f"Decryption not implemented for {self.__auth_type} protocol")
+            raise NotImplementedError(f"Decryption not implemented for {self.__auth_type} protocol")
         return data
 
     def search(self, searchBase=None, scope=None, derefAliases=None, sizeLimit=0, timeLimit=0, typesOnly=False,
@@ -510,8 +514,7 @@ class LDAPConnection:
                     else:
                         raise LDAPSearchError(
                             error=int(searchResult['resultCode']),
-                            errorString='Error in searchRequest -> %s: %s' % (searchResult['resultCode'].prettyPrint(),
-                                                                              searchResult['diagnosticMessage']),
+                            errorString=f"Error in searchRequest -> {searchResult['resultCode'].prettyPrint()}: {searchResult['diagnosticMessage']}",
                             answers=answers
                         )
                 else:
@@ -544,11 +547,13 @@ class LDAPConnection:
 
     def close(self):
         if self._socket is not None:
-            self._socket.close()
+            with contextlib.suppress(Exception):
+                self._socket.close()
+            self._socket = None
 
     def send(self, request, controls=None):
         message = LDAPMessage()
-        message['messageID'] = random.randrange(1, 2147483647)
+        message['messageID'] = random.randint(1, MAX_INT32)
         message['protocolOp'].setComponentByType(request.getTagSet(), request)
         if controls is not None:
             message['controls'].setComponents(*controls)
@@ -570,7 +575,7 @@ class LDAPConnection:
                 done = True
             data += recvData
 
-        if self.__binded and self.__signing: # we need to decrypt every TCP frames, all at once
+        if self.__binded and self.__signing:  # we need to decrypt every TCP frames, all at once
             message_length = struct.unpack('!I', data[:4])[0]
 
             while message_length != len(data) - 4:
@@ -588,26 +593,33 @@ class LDAPConnection:
     def recv(self):
         response = []
         data = self.recv_raw()
-        while len(data) > 0:
+
+        while data:
             try:
-                # need to decrypt before
                 message, remaining = decoder.decode(data, asn1Spec=LDAPMessage())
             except SubstrateUnderrunError:
-                # We need more data
-                remaining = data + self.recv_raw() 
-            else:
-                if message['messageID'] == 0:  # unsolicited notification
-                    name = message['protocolOp']['extendedResp']['responseName'] or message['responseName']
-                    notification = KNOWN_NOTIFICATIONS.get(name, "Unsolicited Notification '%s'" % name)
-                    if name == NOTIFICATION_DISCONNECT:  # Server has disconnected
-                        self.close()
-                    raise LDAPSessionError(
-                        error=int(message['protocolOp']['extendedResp']['resultCode']),
-                        errorString='%s -> %s: %s' % (notification,
-                                                      message['protocolOp']['extendedResp']['resultCode'].prettyPrint(),
-                                                      message['protocolOp']['extendedResp']['diagnosticMessage'])
-                    )
-                response.append(message)
+                data += self.recv_raw()
+                continue
+
+            if getattr(message, 'messageID', None) == 0:
+                protocol_op = message['protocolOp']
+                ext_resp = protocol_op.get('extendedResp', {})
+                name = ext_resp.get('responseName') or getattr(message, 'responseName', None)
+                notification = KNOWN_NOTIFICATIONS.get(name, f"Unsolicited Notification '{name}'")
+                if name == NOTIFICATION_DISCONNECT:
+                    self.close()
+                result_code = ext_resp.get('resultCode', 0)
+                diagnostic_message = ext_resp.get('diagnosticMessage', '')
+
+                # Use ternary operator for the linter (SIM108)
+                rc_str = result_code.prettyPrint() if hasattr(result_code, "prettyPrint") else str(result_code)
+
+                raise LDAPSessionError(
+                    error=int(result_code) if isinstance(result_code, int) or result_code is None else 0,
+                    errorString=f"{notification} -> {rc_str}: {diagnostic_message}",
+                )
+
+            response.append(message)
             data = remaining
 
         return response
@@ -617,29 +629,27 @@ class LDAPConnection:
         return self.recv()
 
     def _parseFilter(self, filterStr):
-        try:
+        with contextlib.suppress(AttributeError):
             filterStr = filterStr.decode()
-        except AttributeError:
-            pass
         filterList = list(reversed(filterStr))
         searchFilter = self._consumeCompositeFilter(filterList)
         if filterList:  # we have not consumed the whole filter string
-            raise LDAPFilterSyntaxError("unexpected token: '%s'" % filterList[-1])
+            raise LDAPFilterSyntaxError(f"unexpected token: '{filterList[-1]}'")
         return searchFilter
 
     def _consumeCompositeFilter(self, filterList):
         try:
             c = filterList.pop()
-        except IndexError:
-            raise LDAPFilterSyntaxError('EOL while parsing search filter')
+        except IndexError as err:
+            raise LDAPFilterSyntaxError('EOL while parsing search filter') from err
         if c != '(':  # filter must start with a '('
             filterList.append(c)
-            raise LDAPFilterSyntaxError("unexpected token: '%s'" % c)
+            raise LDAPFilterSyntaxError(f"unexpected token: '{c}'")
 
         try:
             operator = filterList.pop()
-        except IndexError:
-            raise LDAPFilterSyntaxError('EOL while parsing search filter')
+        except IndexError as err:
+            raise LDAPFilterSyntaxError('EOL while parsing search filter') from err
         if operator not in ['!', '&', '|']:  # must be simple filter in this case
             filterList.extend([operator, c])
             return self._consumeSimpleFilter(filterList)
@@ -653,43 +663,43 @@ class LDAPConnection:
 
         try:
             c = filterList.pop()
-        except IndexError:
-            raise LDAPFilterSyntaxError('EOL while parsing search filter')
+        except IndexError as err:
+            raise LDAPFilterSyntaxError('EOL while parsing search filter') from err
         if c != ')':  # filter must end with a ')'
             filterList.append(c)
-            raise LDAPFilterSyntaxError("unexpected token: '%s'" % c)
+            raise LDAPFilterSyntaxError(f"unexpected token: '{c}'")
 
         return self._compileCompositeFilter(operator, filters)
 
     def _consumeSimpleFilter(self, filterList):
         try:
             c = filterList.pop()
-        except IndexError:
-            raise LDAPFilterSyntaxError('EOL while parsing search filter')
+        except IndexError as err:
+            raise LDAPFilterSyntaxError('EOL while parsing search filter') from err
         if c != '(':  # filter must start with a '('
             filterList.append(c)
-            raise LDAPFilterSyntaxError("unexpected token: '%s'" % c)
+            raise LDAPFilterSyntaxError(f"unexpected token: '{c}'")
 
-        filter = []
+        filter_chars = []
         while True:
             try:
                 c = filterList.pop()
-            except IndexError:
-                raise LDAPFilterSyntaxError('EOL while parsing search filter')
+            except IndexError as err:
+                raise LDAPFilterSyntaxError('EOL while parsing search filter') from err
             if c == ')':  # we pop till we find a ')'
                 break
             elif c == '(':  # should be no unencoded parenthesis
                 filterList.append(c)
                 raise LDAPFilterSyntaxError("unexpected token: '('")
             else:
-                filter.append(c)
+                filter_chars.append(c)
 
-        filterStr = ''.join(filter)
+        filterStr = ''.join(filter_chars)
         try:
             # https://tools.ietf.org/search/rfc4515#section-3
             attribute, operator, value = RE_OPERATOR.split(filterStr, 1)
-        except ValueError:
-            raise LDAPFilterInvalidException("invalid filter: '(%s)'" % filterStr)
+        except ValueError as err:
+            raise LDAPFilterInvalidException(f"invalid filter: '({filterStr})'") from err
 
         return self._compileSimpleFilter(attribute, operator, value)
 
@@ -717,7 +727,7 @@ class LDAPConnection:
         if operator == ':=':  # extensibleMatch
             match = RE_EX_ATTRIBUTE_1.match(attribute) or RE_EX_ATTRIBUTE_2.match(attribute)
             if not match:
-                raise LDAPFilterInvalidException("invalid filter attribute: '%s'" % attribute)
+                raise LDAPFilterInvalidException(f"invalid filter attribute: '{attribute}'")
             attribute, dn, matchingRule = match.groups()
             if attribute:
                 searchFilter['extensibleMatch']['type'] = attribute
@@ -728,7 +738,7 @@ class LDAPConnection:
             searchFilter['extensibleMatch']['matchValue'] = LDAPConnection._processLdapString(value)
         else:
             if not RE_ATTRIBUTE.match(attribute):
-                raise LDAPFilterInvalidException("invalid filter attribute: '%s'" % attribute)
+                raise LDAPFilterInvalidException(f"invalid filter attribute: '{attribute}'")
             if value == '*' and operator == '=':  # present
                 searchFilter['present'] = attribute
             elif '*' in value and operator == '=':  # substring
@@ -737,8 +747,7 @@ class LDAPConnection:
                 substrings = []
                 if assertions[0]:
                     substrings.append(choice.clone().setComponentByName('initial', assertions[0]))
-                for assertion in assertions[1:-1]:
-                    substrings.append(choice.clone().setComponentByName('any', assertion))
+                substrings.extend(choice.clone().setComponentByName('any', assertion) for assertion in assertions[1:-1])
                 if assertions[-1]:
                     substrings.append(choice.clone().setComponentByName('final', assertions[-1]))
                 searchFilter['substrings']['type'] = attribute
@@ -754,10 +763,9 @@ class LDAPConnection:
                 elif operator == '<=':
                     searchFilter['lessOrEqual'].setComponents(attribute, value)
             else:
-                raise LDAPFilterInvalidException("invalid filter '(%s%s%s)'" % (attribute, operator, value))
+                raise LDAPFilterInvalidException(f"invalid filter '({attribute}{operator}{value})'")
 
         return searchFilter
-
 
     @classmethod
     def _processLdapString(cls, ldapstr):
@@ -777,9 +785,7 @@ class LDAPFilterInvalidException(Exception):
 
 
 class LDAPSessionError(Exception):
-    """
-    This is the exception every client should catch
-    """
+    """Exception to catch LDAP session errors."""
 
     def __init__(self, error=0, packet=0, errorString=''):
         Exception.__init__(self)
