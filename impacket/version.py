@@ -9,6 +9,13 @@
 # for more information.
 #
 
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="pkg_resources is deprecated as an API",
+    category=UserWarning,
+)
+
 import pkg_resources
 from impacket import __path__
 
