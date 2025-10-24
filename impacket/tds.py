@@ -740,6 +740,9 @@ class MSSQL:
         LOG.info("Encryption required, switching to TLS")
         # Creates a TLS context
         context = ssl.SSLContext()
+        context.set_ciphers('ALL:@SECLEVEL=0')
+        context.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+        context.verify_mode = ssl.CERT_NONE
         
         # Here comes the important part, MSSQL server does not expect a raw TLS socket
         # Instead it expects TDS packets to be sent in which TLS data is embedded
@@ -1177,7 +1180,7 @@ class MSSQL:
         for row in self.rows:
             for col in self.colMeta:
                 self.__rowsPrinter.logMessage(col['Format'] % row[col['Name']] + self.COL_SEPARATOR)
-            self.__rowsPrinter.logMessage('\n')
+            self.__rowsPrinter.logMessage('\r')
 
     def printReplies(self, error_logger=LOG.error, info_logger=LOG.info):
         for keys in list(self.replies.keys()):

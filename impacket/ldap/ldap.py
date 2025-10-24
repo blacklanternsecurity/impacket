@@ -120,7 +120,7 @@ class LDAPConnection:
             raise LDAPSessionError(errorString=f"Unknown URL prefix: '{url}'")
 
         self.__binded = False
-        self.__channel_binding_value = None
+        self.channel_binding_value = None
 
         # SASL Auth LDAP Signing arguments
         self.sequenceNumber = 0
@@ -162,18 +162,18 @@ class LDAPConnection:
             peer_cert_digest_bytes = bytes.fromhex(peer_cert_digest_str.replace(':', ''))
         
             channel_binding_struct = b''
-            initiator_address = b'\x00' * 8
-            acceptor_address = b'\x00' * 8
+            initiator_address = b'\x00'*8
+            acceptor_address = b'\x00'*8
 
             # https://datatracker.ietf.org/doc/html/rfc5929#section-4
             application_data_raw = b'tls-server-end-point:' + peer_cert_digest_bytes
-            len_application_data = len(application_data_raw).to_bytes(4, byteorder='little', signed=False)
+            len_application_data = len(application_data_raw).to_bytes(4, byteorder='little', signed = False)
             application_data = len_application_data
             application_data += application_data_raw
             channel_binding_struct += initiator_address
             channel_binding_struct += acceptor_address
             channel_binding_struct += application_data
-            self.__channel_binding_value = md5(channel_binding_struct).digest()
+            self.channel_binding_value = md5(channel_binding_struct).digest()
 
     def kerberosLogin(self, user, password, domain='', lmhash='', nthash='', aesKey='', kdcHost=None, TGT=None,
                       TGS=None, useCache=True):
@@ -279,8 +279,9 @@ class LDAPConnection:
         chkField['Flags'] = GSS_C_SEQUENCE_FLAG | GSS_C_REPLAY_FLAG
 
         # If TLS is used, setup channel binding
-        if self._SSL and self.__channel_binding_value is not None:
-            chkField['Bnd'] = self.__channel_binding_value
+
+        if self._SSL and self.channel_binding_value is not None:
+            chkField['Bnd'] = self.channel_binding_value
         if self.__signing:
             chkField['Flags'] |= GSS_C_CONF_FLAG
             chkField['Flags'] |= GSS_C_INTEG_FLAG
@@ -382,8 +383,8 @@ class LDAPConnection:
 
             # If TLS is used, setup channel binding
             channel_binding_value = b''
-            if self._SSL and self.__channel_binding_value is not None:
-                channel_binding_value = self.__channel_binding_value
+            if self._SSL and self.channel_binding_value is not None:
+                channel_binding_value = self.channel_binding_value
 
             # NTLM Auth
             type3, exportedSessionKey = getNTLMSSPType3(negotiate, bytes(type2), user, password, domain, lmhash, nthash, channel_binding_value=channel_binding_value)
@@ -427,8 +428,8 @@ class LDAPConnection:
             
             # channel binding
             channel_binding_value = b''
-            if self._SSL and self.__channel_binding_value is not None:
-                channel_binding_value = self.__channel_binding_value
+            if self._SSL and self.channel_binding_value is not None:
+                channel_binding_value = self.channel_binding_value
             
             # NTLM Auth
             type3, exportedSessionKey = getNTLMSSPType3(negotiate, type2, user, password, domain, lmhash, nthash, service='ldap', version=self.version, use_ntlmv2=True, channel_binding_value=channel_binding_value)
