@@ -387,7 +387,7 @@ class LDAPConnection:
                 channel_binding_value = self.channel_binding_value
 
             # NTLM Auth
-            type3, exportedSessionKey = getNTLMSSPType3(negotiate, bytes(type2), user, password, domain, lmhash, nthash, channel_binding_value=channel_binding_value)
+            type3, exportedSessionKey = getNTLMSSPType3(negotiate, bytes(type2), user, password, domain, lmhash, nthash, service='ldap', channel_binding_value=channel_binding_value)
             bindRequest['authentication']['sicilyResponse'] = type3.getData()
             response = self.sendReceive(bindRequest)[0]['protocolOp']
         elif authenticationChoice == 'sasl':

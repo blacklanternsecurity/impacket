@@ -589,6 +589,15 @@ def ntlmssp_DES_encrypt(key, challenge):
 
 # High level functions to use NTLMSSP
 
+def _default_ntlm_version():
+    """Return a VERSION structure that looks like a current Windows 10/11 client."""
+    v = VERSION()
+    v['ProductMajorVersion'] = 10
+    v['ProductMinorVersion'] = 0
+    v['ProductBuild'] = random.choice([19041, 19042, 19044, 19045, 22000, 22621, 26100])
+    v['NTLMRevisionCurrent'] = VERSION.NTLMSSP_REVISION_W2K3
+    return v.getData()
+
 def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlmv2 = USE_NTLMv2, version = None):
     # Let's do some encoding checks before moving on. Kind of dirty, but found effective when dealing with
     # international characters.
@@ -608,16 +617,16 @@ def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlm
     auth = NTLMAuthNegotiate()
     auth['flags']=0
     if signingRequired:
-       auth['flags'] = NTLMSSP_NEGOTIATE_KEY_EXCH | NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_ALWAYS_SIGN | \
-                       NTLMSSP_NEGOTIATE_SEAL
+       auth['flags'] = NTLMSSP_NEGOTIATE_KEY_EXCH | NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL
     if use_ntlmv2:
        auth['flags'] |= NTLMSSP_NEGOTIATE_TARGET_INFO
     auth['flags'] |= NTLMSSP_NEGOTIATE_NTLM | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY | NTLMSSP_NEGOTIATE_UNICODE | \
-                     NTLMSSP_REQUEST_TARGET |  NTLMSSP_NEGOTIATE_128 | NTLMSSP_NEGOTIATE_56
+                     NTLMSSP_REQUEST_TARGET |  NTLMSSP_NEGOTIATE_128 | NTLMSSP_NEGOTIATE_56 | \
+                     NTLMSSP_NEGOTIATE_ALWAYS_SIGN | NTLMSSP_NEGOTIATE_VERSION
 
-    if version is not None:
-        auth['flags'] |= NTLMSSP_NEGOTIATE_VERSION
-        auth['os_version'] = version
+    if version is None:
+        version = _default_ntlm_version()
+    auth['os_version'] = version
 
     # We're not adding workstation / domain fields this time. Normally Windows clients don't add such information but,
     # we will save the workstation name to be used later.
@@ -702,7 +711,7 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
     if ntlmChallenge['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH:
        # not exactly what I call random tho :\
        # exportedSessionKey = this is the key we should use to sign
-       exportedSessionKey = b("".join([random.choice(string.digits+string.ascii_letters) for _ in range(16)]))
+       exportedSessionKey = os.urandom(16)
        #exportedSessionKey = "A"*16
        #print "keyExchangeKey %r" % keyExchangeKey
        # Let's generate the right session key based on the challenge flags
@@ -728,19 +737,46 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
        # [MS-NLMP] page 46
        exportedSessionKey        = keyExchangeKey
 
-    ntlmChallengeResponse['flags'] = responseFlags
-    ntlmChallengeResponse['domain_name'] = domain.encode('utf-16le')
+    # If the server's CHALLENGE_MESSAGE included a Timestamp AV pair we are
+    # expected to compute a MIC and zero out the LM response per [MS-NLMP]
+    # 3.1.5.1.2. This is what every modern Windows client does.
+    challenge_av = AV_PAIRS(serverName) if serverName else None
+    have_timestamp = challenge_av is not None and challenge_av[NTLMSSP_AV_TIME] is not None
+    compute_mic = have_timestamp and use_ntlmv2
+
+    # Use the NetBIOS domain advertised by the server when available, instead
+    # of the caller-supplied value.
+    if challenge_av is not None and challenge_av[NTLMSSP_AV_DOMAINNAME] is not None:
+        wire_domain = challenge_av[NTLMSSP_AV_DOMAINNAME][1]
+    else:
+        wire_domain = domain.encode('utf-16le')
+
+    ntlmChallengeResponse['flags'] = responseFlags | NTLMSSP_NEGOTIATE_VERSION
+    ntlmChallengeResponse['domain_name'] = wire_domain
     ntlmChallengeResponse['host_name'] = type1.getWorkstation().encode('utf-16le')
-    if lmResponse == '':
+    if compute_mic:
+        # When timestamp is present the spec says LM response MUST be Z(24).
+        ntlmChallengeResponse['lanman'] = b'\x00' * 24
+    elif lmResponse == '':
         ntlmChallengeResponse['lanman'] = b'\x00'
     else:
         ntlmChallengeResponse['lanman'] = lmResponse
 
-    if version is not None:
-        ntlmChallengeResponse['Version'] = version
+    if version is None:
+        version = _default_ntlm_version()
+    ntlmChallengeResponse['Version'] = version
     ntlmChallengeResponse['ntlm'] = ntResponse
-    if encryptedRandomSessionKey is not None: 
+    if encryptedRandomSessionKey is not None:
         ntlmChallengeResponse['session_key'] = encryptedRandomSessionKey
+
+    if compute_mic:
+        # Reserve space for the MIC, serialize, then patch in the real value.
+        ntlmChallengeResponse['MIC'] = b'\x00' * 16
+        type1_data = type1.getData() if hasattr(type1, 'getData') else bytes(type1)
+        type2_data = type2 if isinstance(type2, (bytes, bytearray)) else bytes(type2)
+        type3_zero = ntlmChallengeResponse.getData()
+        mic = hmac_md5(exportedSessionKey, type1_data + type2_data + type3_zero)
+        ntlmChallengeResponse['MIC'] = mic
 
     return ntlmChallengeResponse, exportedSessionKey
 
@@ -956,17 +992,27 @@ def computeResponseNTLMv2(flags, serverChallenge, clientChallenge, serverName, d
     # level
     if TEST_CASE is False:
         av_pairs[NTLMSSP_AV_TARGET_NAME] = f"{service}/".encode('utf-16le') + av_pairs[NTLMSSP_AV_DNS_HOSTNAME][1]
-        if av_pairs[NTLMSSP_AV_TIME] is not None:
+        timestamp_present = av_pairs[NTLMSSP_AV_TIME] is not None
+        if timestamp_present:
            aTime = av_pairs[NTLMSSP_AV_TIME][1]
         else:
            aTime = struct.pack('<q', (116444736000000000 + calendar.timegm(time.gmtime()) * 10000000) )
            av_pairs[NTLMSSP_AV_TIME] = aTime
+        # Always provide an MsvAvFlags entry. Bit 0x2 indicates the client
+        # provides a MIC, which is the case whenever the server sent a
+        # Timestamp AV pair in the challenge.
+        flags_value = 0x00000002 if timestamp_present else 0x00000000
+        av_pairs[NTLMSSP_AV_FLAGS] = struct.pack('<L', flags_value)
         serverName = av_pairs.getData()
     else:
         aTime = b'\x00'*8
-    
+
     if len(channel_binding_value) > 0:
         av_pairs[NTLMSSP_AV_CHANNEL_BINDINGS] = channel_binding_value
+    elif TEST_CASE is False and av_pairs[NTLMSSP_AV_TIME] is not None:
+        # Spec: when MsvAvTimestamp is present and there is no real channel
+        # binding, set MsvAvChannelBindings to Z(16).
+        av_pairs[NTLMSSP_AV_CHANNEL_BINDINGS] = b'\x00' * 16
 
     # Format according to:
     # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/aee311d6-21a7-4470-92a5-c4ecb022a87b
