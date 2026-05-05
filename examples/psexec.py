@@ -167,7 +167,7 @@ class PSEXEC:
             packet = RemComMessage()
             pid = os.getpid()
 
-            packet['Machine'] = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
+            packet['Machine'] = 'DESKTOP-' + ''.join([random.choice(string.ascii_uppercase + string.digits) for _ in range(7)])
             if self.__path is not None:
                 packet['WorkingDir'] = self.__path
             packet['Command'] = self.__command

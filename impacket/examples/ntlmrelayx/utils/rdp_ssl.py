@@ -13,9 +13,14 @@
 #   Handles TLS context creation and self-signed certificate generation.
 
 import random
+import string
 import tempfile
 
 from OpenSSL import SSL, crypto
+
+
+def _default_cn():
+    return 'DESKTOP-' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(7))
 
 
 class ServerTLSContext:
@@ -49,16 +54,17 @@ class ServerTLSContext:
         return context
 
 
-def generate_self_signed_cert(common_name="RDP-Server"):
+def generate_self_signed_cert(common_name=None):
+    if common_name is None:
+        common_name = _default_cn()
     key = crypto.PKey()
     key.generate_key(crypto.TYPE_RSA, 2048)
 
-    # Create self-signed certificate
     cert = crypto.X509()
     cert.get_subject().CN = common_name
-    cert.set_serial_number(random.randint(0, 100000))
-    cert.gmtime_adj_notBefore(0)
-    cert.gmtime_adj_notAfter(365 * 24 * 60 * 60)  # 1 year validity
+    cert.set_serial_number(random.getrandbits(63))
+    cert.gmtime_adj_notBefore(-random.randint(0, 30) * 86400)
+    cert.gmtime_adj_notAfter(365 * 24 * 60 * 60)
     cert.set_issuer(cert.get_subject())
     cert.set_pubkey(key)
     cert.sign(key, "sha256")

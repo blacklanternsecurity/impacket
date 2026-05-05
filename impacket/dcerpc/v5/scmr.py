@@ -1334,9 +1334,12 @@ def hREnumServicesStatusW(dce, hSCManager, dwServiceType=SERVICE_WIN32_OWN_PROCE
 
     return enumArray['Data']
 
-def hROpenSCManagerW(dce, lpMachineName='DUMMY\x00', lpDatabaseName='ServicesActive\x00', dwDesiredAccess=SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_ENUMERATE_DEPENDENTS | SC_MANAGER_ENUMERATE_SERVICE):
+def hROpenSCManagerW(dce, lpMachineName=NULL, lpDatabaseName='ServicesActive\x00', dwDesiredAccess=SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_ENUMERATE_DEPENDENTS | SC_MANAGER_ENUMERATE_SERVICE):
     openSCManager = ROpenSCManagerW()
-    openSCManager['lpMachineName'] = checkNullString(lpMachineName)
+    if lpMachineName is NULL:
+        openSCManager['lpMachineName'] = NULL
+    else:
+        openSCManager['lpMachineName'] = checkNullString(lpMachineName)
     openSCManager['lpDatabaseName'] = checkNullString(lpDatabaseName)
     openSCManager['dwDesiredAccess'] = dwDesiredAccess
     return dce.request(openSCManager)

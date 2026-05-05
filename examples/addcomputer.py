@@ -189,13 +189,14 @@ class ADDCOMPUTER:
                 computerHostname = self.__computerName[:-1]
                 computerDn = ('CN=%s,%s' % (computerHostname, self.__computerGroup))
 
-                # Default computer SPNs
+                # Default computer SPNs (order randomized to avoid a fixed fingerprint)
                 spns = [
                     'HOST/%s' % computerHostname,
                     'HOST/%s.%s' % (computerHostname, self.__domain),
                     'RestrictedKrbHost/%s' % computerHostname,
                     'RestrictedKrbHost/%s.%s' % (computerHostname, self.__domain),
                 ]
+                random.shuffle(spns)
                 ucd = {
                     'dnsHostName': '%s.%s' % (computerHostname, self.__domain),
                     'userAccountControl': 0x1000,
@@ -235,7 +236,9 @@ class ADDCOMPUTER:
         return connection.entries[0]
 
     def generateComputerName(self):
-        return 'DESKTOP-' + (''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8)) + '$')
+        prefix = random.choice(['DESKTOP', 'LAPTOP', 'WIN', 'PC'])
+        suffix_len = random.randint(7, 11)
+        return '%s-%s$' % (prefix, ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(suffix_len)))
 
     def doSAMRAdd(self, rpctransport):
         dce = rpctransport.get_dce_rpc()

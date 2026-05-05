@@ -43,6 +43,8 @@ import cmd
 import logging
 import ntpath
 import os
+import random
+import string
 import sys
 import time
 from base64 import b64encode
@@ -61,7 +63,7 @@ from impacket.examples.utils import parse_target
 from impacket.smbconnection import SMBConnection, SMB_DIALECT, SMB2_DIALECT_002, SMB2_DIALECT_21
 from impacket.krb5.keytab import Keytab
 
-OUTPUT_FILENAME = '__' + str(time.time())[:5]
+OUTPUT_FILENAME = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(random.randint(8, 14))) + '.tmp'
 CODEC = sys.stdout.encoding
 
 class DCOMEXEC:

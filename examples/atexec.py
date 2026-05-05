@@ -27,6 +27,7 @@ import string
 import sys
 import argparse
 import time
+import datetime
 import random
 import logging
 
@@ -127,7 +128,7 @@ class TSCH_EXEC:
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers>
     <CalendarTrigger>
-      <StartBoundary>2015-07-15T20:35:13.2757294</StartBoundary>
+      <StartBoundary>__STARTBOUNDARY__</StartBoundary>
       <Enabled>true</Enabled>
       <ScheduleByDay>
         <DaysInterval>1</DaysInterval>
@@ -165,8 +166,10 @@ class TSCH_EXEC:
     </Exec>
   </Actions>
 </Task>
-        """ % ((xml_escape(cmd) if self.__silentCommand is False else self.__command.split()[0]), 
+        """ % ((xml_escape(cmd) if self.__silentCommand is False else self.__command.split()[0]),
             (xml_escape(args) if self.__silentCommand is False else " ".join(self.__command.split()[1:])))
+        startBoundary = (datetime.datetime.now() - datetime.timedelta(days=random.randint(7, 365))).strftime('%Y-%m-%dT%H:%M:%S.%f')
+        xml = xml.replace('__STARTBOUNDARY__', startBoundary)
         taskCreated = False
         try:
             logging.info('Creating task \\%s' % tmpName)

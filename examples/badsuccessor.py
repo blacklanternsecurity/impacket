@@ -400,8 +400,9 @@ class BADSUCCESSOR:
 
 
     def generate_dmsa_name(self):
-        random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        return 'dMSA-%s' % random_suffix
+        prefix = random.choice(['svc', 'gMSA', 'msa', 'dsvc'])
+        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=random.randint(6, 12)))
+        return '%s_%s' % (prefix, random_suffix)
 
     def convert_sid_to_string(self, sid_bytes):
         try:

@@ -56,9 +56,9 @@ from impacket import version, smbserver
 from impacket.dcerpc.v5 import transport, scmr
 from impacket.krb5.keytab import Keytab
 
-OUTPUT_FILENAME = '__output_' + ''.join([random.choice(string.ascii_letters) for i in range(8)])
-SMBSERVER_DIR   = '__tmp'
-DUMMY_SHARE     = 'TMP'
+OUTPUT_FILENAME = ''.join([random.choice(string.ascii_lowercase) for _ in range(random.randint(6, 12))]) + '.log'
+SMBSERVER_DIR   = 'tmp_' + ''.join([random.choice(string.ascii_lowercase) for _ in range(6)])
+DUMMY_SHARE     = ''.join([random.choice(string.ascii_uppercase) for _ in range(random.randint(3, 6))])
 CODEC = sys.stdout.encoding
 
 class SMBServer(Thread):
@@ -281,7 +281,7 @@ class RemoteShell(cmd.Cmd):
             data = '$ProgressPreference="SilentlyContinue";' + data
             data = self.__pwsh + b64encode(data.encode('utf-16le')).decode()
 
-        batchFile = '%SYSTEMROOT%\\' + ''.join([random.choice(string.ascii_letters) for _ in range(8)]) + '.bat'
+        batchFile = '%TEMP%\\' + ''.join([random.choice(string.ascii_lowercase + string.digits) for _ in range(random.randint(6, 12))]) + '.cmd'
                 
         command = self.__shell + 'echo ' + data + ' ^> ' + self.__output + ' 2^>^&1 > ' + batchFile + ' & ' + \
                   self.__shell + batchFile
