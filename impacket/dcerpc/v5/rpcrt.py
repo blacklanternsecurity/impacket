@@ -139,8 +139,14 @@ MSRPC_CONT_RESULT_NEGOTIATE_ACK = 3
 rpc_cont_def_result = {
     0       : 'acceptance',
     1       : 'user_rejection',
-    2       : 'provider_rejection'
+    2       : 'provider_rejection',
+    3       : 'negotiate_ack',
 }
+
+# [MS-RPCE] 3.3.1.5.3 BindTimeFeatureNegotiation. The abstract syntax UUID
+# encodes a feature bitmask in its low bytes. 0x03 = SecurityContextMultiplexing
+# | KeepConnectionOnOrphan, which is what current Windows clients advertise.
+BIND_TIME_FEATURE_NEGOTIATION_UUID = uuidtup_to_bin(('6cb71c2c-9812-4540-0300-000000000000', '1.0'))
 
 #status codes, references:
 #https://docs.microsoft.com/windows/desktop/Rpc/rpc-return-values
@@ -1549,6 +1555,17 @@ class DCERPC_v5(DCERPC):
         item['ContextID'] = ctx
         item['TransItems'] = 1
         bind.addCtxItem(item)
+        self._bind_main_ctx = ctx
+
+        # Bind Time Feature Negotiation. Windows always sends a second
+        # context item advertising BTFN; servers that don't understand it
+        # respond with negotiate_ack rather than rejecting the bind.
+        btfn_item = CtxItem()
+        btfn_item['AbstractSyntax'] = BIND_TIME_FEATURE_NEGOTIATION_UUID
+        btfn_item['TransferSyntax'] = uuidtup_to_bin(transfer_syntax)
+        btfn_item['ContextID'] = ctx + 1
+        btfn_item['TransItems'] = 1
+        bind.addCtxItem(btfn_item)
 
         packet = MSRPCHeader()
         packet['type'] = MSRPC_BIND
@@ -1618,10 +1635,20 @@ class DCERPC_v5(DCERPC):
         else:
             raise DCERPCException('Unknown DCE RPC packet type received: %d' % resp['type'])
 
+        # The 1-based ContextID of the interface we actually care about.
+        main_ctx_index = getattr(self, '_bind_main_ctx', bogus_binds) + 1
         # check ack results for each context, except for the bogus ones
         for ctx in range(bogus_binds+1,bindResp['ctx_num']+1):
             ctxItems = bindResp.getCtxItem(ctx)
+            # Result 3 = negotiate_ack, sent by servers acknowledging a
+            # Bind Time Feature Negotiation context. Don't treat as fatal.
+            if ctxItems['Result'] == 3:
+                continue
             if ctxItems['Result'] != 0:
+                if ctx != main_ctx_index:
+                    # Subordinate contexts (e.g. extra transfer syntaxes)
+                    # may legitimately be rejected by the server.
+                    continue
                 msg = "Bind context %d rejected: " % ctx
                 msg += rpc_cont_def_result.get(ctxItems['Result'], 'Unknown DCE RPC context result code: %.4x' % ctxItems['Result'])
                 msg += "; "
@@ -1632,7 +1659,8 @@ class DCERPC_v5(DCERPC):
                 raise DCERPCException(msg)
 
             # Save the transfer syntax for later use
-            self.transfer_syntax = ctxItems['TransferSyntax'] 
+            if ctx == main_ctx_index:
+                self.transfer_syntax = ctxItems['TransferSyntax']
 
         # The received transmit size becomes the client's receive size, and the received receive size becomes the client's transmit size.
         self.__max_xmit_size = bindResp['max_rfrag']

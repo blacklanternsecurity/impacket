@@ -1107,6 +1107,15 @@ class DCOMConnection:
         DCOMConnection.PORTMAPS[self.__target] = self.__portmap
 
     def CoCreateInstanceEx(self, clsid, iid):
+        # Real Windows clients always issue an IObjectExporter::ServerAlive2
+        # preflight against the resolver before invoking the activator.
+        # Skipping it is one of the more obvious DCOM/WMI fingerprints, so
+        # we mirror Windows here. Failures are tolerated; activation will
+        # surface its own errors.
+        try:
+            IObjectExporter(self.__portmap).ServerAlive2()
+        except Exception as e:
+            LOG.debug('ServerAlive2 preflight failed (continuing): %s' % e)
         scm = IRemoteSCMActivator(self.__portmap)
         iInterface = scm.RemoteCreateInstance(clsid, iid)
         self.initTimer()
@@ -1418,7 +1427,10 @@ class IRemUnknown(INTERFACE):
         request['cInterfaceRefs'] = 1
         element = REMINTERFACEREF()
         element['ipid'] = self.get_iPid()
-        element['cPublicRefs'] = 1
+        # Windows COM runtime adds references in larger increments to avoid
+        # round-tripping per ref. 5 matches the reference batch size used by
+        # ole32.dll on current Windows builds.
+        element['cPublicRefs'] = 5
         request['InterfaceRefs'].append(element)
         resp = self.request(request, IID_IRemUnknown, self.get_ipidRemUnknown())
         return resp
@@ -1430,7 +1442,8 @@ class IRemUnknown(INTERFACE):
         request['cInterfaceRefs'] = 1
         element = REMINTERFACEREF()
         element['ipid'] = self.get_iPid()
-        element['cPublicRefs'] = 1
+        # Match the AddRef batch so the server's refcount lands at 0.
+        element['cPublicRefs'] = 5
         request['InterfaceRefs'].append(element)
         resp = self.request(request, IID_IRemUnknown, self.get_ipidRemUnknown())
         DCOMConnection.delOid(self.get_target(), self.get_oid())
@@ -1705,7 +1718,9 @@ class IRemoteSCMActivator:
         # ScmRequestInfo
         scmInfo = ScmRequestInfoData()
         scmInfo['pdwReserved'] = NULL
-        #scmInfo['remoteRequest']['ClientImpLevel'] = 2
+        # 2 == RPC_C_IMP_LEVEL_IDENTIFY. Real Windows clients always populate
+        # this; leaving it at 0 is an Impacket-specific tell.
+        scmInfo['remoteRequest']['ClientImpLevel'] = 2
         scmInfo['remoteRequest']['cRequestedProtseqs'] = 1
         scmInfo['remoteRequest']['pRequestedProtseqs'].append(7)
 
@@ -1868,7 +1883,9 @@ class IRemoteSCMActivator:
         # ScmRequestInfo
         scmInfo = ScmRequestInfoData()
         scmInfo['pdwReserved'] = NULL
-        #scmInfo['remoteRequest']['ClientImpLevel'] = 2
+        # 2 == RPC_C_IMP_LEVEL_IDENTIFY. Real Windows clients always populate
+        # this; leaving it at 0 is an Impacket-specific tell.
+        scmInfo['remoteRequest']['ClientImpLevel'] = 2
         scmInfo['remoteRequest']['cRequestedProtseqs'] = 1
         scmInfo['remoteRequest']['pRequestedProtseqs'].append(7)
 
