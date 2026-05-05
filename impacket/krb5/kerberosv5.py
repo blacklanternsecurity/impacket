@@ -32,7 +32,7 @@ from binascii import unhexlify, hexlify
 
 from impacket.krb5.asn1 import AS_REQ, AP_REQ, TGS_REQ, KERB_PA_PAC_REQUEST, KRB_ERROR, PA_ENC_TS_ENC, AS_REP, TGS_REP, \
     EncryptedData, Authenticator, EncASRepPart, EncTGSRepPart, seq_set, seq_set_iter, KERB_ERROR_DATA, METHOD_DATA, \
-    ETYPE_INFO2, ETYPE_INFO, AP_REP, EncAPRepPart, KERB_SUPERSEDED_BY_USER
+    ETYPE_INFO2, ETYPE_INFO, AP_REP, EncAPRepPart, KERB_SUPERSEDED_BY_USER, PA_PAC_OPTIONS
 from impacket.krb5.types import KerberosTime, Principal, Ticket
 from impacket.krb5.gssapi import CheckSumField, GSS_C_DCE_STYLE, GSS_C_MUTUAL_FLAG, GSS_C_REPLAY_FLAG, \
     GSS_C_SEQUENCE_FLAG, GSS_C_CONF_FLAG, GSS_C_INTEG_FLAG
@@ -115,7 +115,7 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
             pass
     if serverName is not None and not isinstance(serverName, Principal):
         try:
-            serverName = Principal(serverName, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
+            serverName = Principal(serverName, type=constants.PrincipalNameType.NT_SRV_INST.value)
         except TypeError:
             pass
 
@@ -124,9 +124,9 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
     domain = domain.upper()
 
     if serverName is None:
-        serverName = Principal('krbtgt/%s'%domain, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
+        serverName = Principal('krbtgt/%s'%domain, type=constants.PrincipalNameType.NT_SRV_INST.value)
     else:
-        serverName = Principal(serverName, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
+        serverName = Principal(serverName, type=constants.PrincipalNameType.NT_SRV_INST.value)
 
     pacRequest = KERB_PA_PAC_REQUEST()
     pacRequest['include-pac'] = requestPAC
@@ -145,7 +145,8 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
     opts = list()
     opts.append( constants.KDCOptions.forwardable.value )
     opts.append( constants.KDCOptions.renewable.value )
-    opts.append( constants.KDCOptions.proxiable.value )
+    opts.append( constants.KDCOptions.canonicalize.value )
+    opts.append( constants.KDCOptions.renewable_ok.value )
     reqBody['kdc-options']  = constants.encodeFlags(opts)
 
     seq_set(reqBody, 'sname', serverName.components_to_asn1)
@@ -156,9 +157,13 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
 
     reqBody['realm'] = domain
 
-    now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
-    reqBody['till'] = KerberosTime.to_asn1(now)
-    reqBody['rtime'] = KerberosTime.to_asn1(now)
+    # Windows clients send "till" far in the future (the KDC bounds it
+    # by policy) and "rtime" set to the renewable lifetime. Use
+    # KerberosTime "infinity" (2037-09-13T02:48:05Z, the 32-bit time_t
+    # rollover) for both to match real captures.
+    _kerberos_infinity = datetime.datetime(2037, 9, 13, 2, 48, 5, tzinfo=datetime.timezone.utc)
+    reqBody['till'] = KerberosTime.to_asn1(_kerberos_infinity)
+    reqBody['rtime'] = KerberosTime.to_asn1(_kerberos_infinity)
     reqBody['nonce'] =  rand.getrandbits(31)
 
     # Yes.. this shouldn't happen but it's inherited from the past
@@ -305,7 +310,8 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
         opts = list()
         opts.append( constants.KDCOptions.forwardable.value )
         opts.append( constants.KDCOptions.renewable.value )
-        opts.append( constants.KDCOptions.proxiable.value )
+        opts.append( constants.KDCOptions.canonicalize.value )
+        opts.append( constants.KDCOptions.renewable_ok.value )
         reqBody['kdc-options'] = constants.encodeFlags(opts)
 
         seq_set(reqBody, 'sname', serverName.components_to_asn1)
@@ -313,9 +319,8 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
 
         reqBody['realm'] =  domain
 
-        now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
-        reqBody['till'] = KerberosTime.to_asn1(now)
-        reqBody['rtime'] =  KerberosTime.to_asn1(now)
+        reqBody['till'] = KerberosTime.to_asn1(_kerberos_infinity)
+        reqBody['rtime'] =  KerberosTime.to_asn1(_kerberos_infinity)
         reqBody['nonce'] = rand.getrandbits(31)
 
         seq_set_iter(reqBody, 'etype', ( (int(cipher.enctype),)))
@@ -426,6 +431,13 @@ def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey, renew =
     tgsReq['padata'][0]['padata-type'] = int(constants.PreAuthenticationDataTypes.PA_TGS_REQ.value)
     tgsReq['padata'][0]['padata-value'] = encodedApReq
 
+    # PA-PAC-OPTIONS (claims) is sent by Windows clients on every TGS-REQ.
+    pacOptions = PA_PAC_OPTIONS()
+    pacOptions['flags'] = constants.encodeFlags([constants.PAPacOptions.claims.value])
+    tgsReq['padata'][1] = noValue
+    tgsReq['padata'][1]['padata-type'] = constants.PreAuthenticationDataTypes.PA_PAC_OPTIONS.value
+    tgsReq['padata'][1]['padata-value'] = encoder.encode(pacOptions)
+
     reqBody = seq_set(tgsReq, 'req-body')
 
     opts = list()
@@ -437,23 +449,27 @@ def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey, renew =
 
     if renew == True:
         opts.append( constants.KDCOptions.renew.value )
+    if constants.KDCOptions.canonicalize.value not in opts:
+        opts.append( constants.KDCOptions.canonicalize.value )
 
     reqBody['kdc-options'] = constants.encodeFlags(opts)
     seq_set(reqBody, 'sname', serverName.components_to_asn1)
     reqBody['realm'] = domain
 
-    now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
-
-    reqBody['till'] = KerberosTime.to_asn1(now)
+    _kerberos_infinity = datetime.datetime(2037, 9, 13, 2, 48, 5, tzinfo=datetime.timezone.utc)
+    reqBody['till'] = KerberosTime.to_asn1(_kerberos_infinity)
     reqBody['nonce'] = rand.getrandbits(31)
-    seq_set_iter(reqBody, 'etype',
-                      (
-                          int(constants.EncryptionTypes.rc4_hmac.value),
-                          int(constants.EncryptionTypes.des3_cbc_sha1_kd.value),
-                          int(constants.EncryptionTypes.des_cbc_md5.value),
-                          int(cipher.enctype)
-                       )
-                )
+    # Windows TGS-REQ etype order: AES256, AES128, then current cipher
+    # (which may be AES or RC4) plus RC4 fallback. Drop DES.
+    _etype_order = [
+        int(constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value),
+        int(constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value),
+        int(cipher.enctype),
+        int(constants.EncryptionTypes.rc4_hmac.value),
+    ]
+    seen = set()
+    _etype_order = tuple(e for e in _etype_order if not (e in seen or seen.add(e)))
+    seq_set_iter(reqBody, 'etype', _etype_order)
 
     message = encoder.encode(tgsReq)
 
@@ -628,7 +644,7 @@ def getKerberosType1(username, password, domain, lmhash, nthash, aesKey='', TGT 
     blob = SPNEGO_NegTokenInit()
 
     # Kerberos
-    blob['MechTypes'] = [TypesMech['MS KRB5 - Microsoft Kerberos 5']]
+    blob['MechTypes'] = [TypesMech['KRB5 - Kerberos 5'], TypesMech['MS KRB5 - Microsoft Kerberos 5']]
 
     # Let's extract the ticket from the TGS
     tgs = decoder.decode(tgs, asn1Spec = TGS_REP())[0]

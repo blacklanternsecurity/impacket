@@ -1414,7 +1414,7 @@ class MSSQL:
         blob = SPNEGO_NegTokenInit()
 
         # Kerberos
-        blob["MechTypes"] = [TypesMech["MS KRB5 - Microsoft Kerberos 5"]]
+        blob["MechTypes"] = [TypesMech["KRB5 - Kerberos 5"], TypesMech["MS KRB5 - Microsoft Kerberos 5"]]
 
         # Let's extract the ticket from the TGS
         tgs = decoder.decode(tgs, asn1Spec=TGS_REP())[0]
