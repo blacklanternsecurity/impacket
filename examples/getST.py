@@ -321,7 +321,12 @@ class GETST:
 
             # Add resource-based constrained delegation support
             paPacOptions = PA_PAC_OPTIONS()
-            paPacOptions['flags'] = constants.encodeFlags((constants.PAPacOptions.resource_based_constrained_delegation.value,))
+            # Real Windows clients always include the claims bit. We add
+            # RBCD on top, since this script is the RBCD attack tool.
+            paPacOptions['flags'] = constants.encodeFlags((
+                constants.PAPacOptions.claims.value,
+                constants.PAPacOptions.resource_based_constrained_delegation.value,
+            ))
 
             tgsReq['padata'][1] = noValue
             tgsReq['padata'][1]['padata-type'] = constants.PreAuthenticationDataTypes.PA_PAC_OPTIONS.value
@@ -737,7 +742,11 @@ class GETST:
 
         # Add resource-based constrained delegation support
         paPacOptions = PA_PAC_OPTIONS()
-        paPacOptions['flags'] = constants.encodeFlags((constants.PAPacOptions.resource_based_constrained_delegation.value,))
+        # Include the claims bit alongside RBCD to match Windows captures.
+        paPacOptions['flags'] = constants.encodeFlags((
+            constants.PAPacOptions.claims.value,
+            constants.PAPacOptions.resource_based_constrained_delegation.value,
+        ))
 
         tgsReq['padata'][1] = noValue
         tgsReq['padata'][1]['padata-type'] = constants.PreAuthenticationDataTypes.PA_PAC_OPTIONS.value

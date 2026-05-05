@@ -108,7 +108,7 @@ class GetUserNoPreAuth:
         asReq = AS_REQ()
 
         domain = self.__domain.upper()
-        serverName = Principal('krbtgt/%s' % domain, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
+        serverName = Principal('krbtgt/%s' % domain, type=constants.PrincipalNameType.NT_SRV_INST.value)
 
         pacRequest = KERB_PA_PAC_REQUEST()
         pacRequest['include-pac'] = requestPAC
@@ -127,7 +127,8 @@ class GetUserNoPreAuth:
         opts = list()
         opts.append(constants.KDCOptions.forwardable.value)
         opts.append(constants.KDCOptions.renewable.value)
-        opts.append(constants.KDCOptions.proxiable.value)
+        opts.append(constants.KDCOptions.canonicalize.value)
+        opts.append(constants.KDCOptions.renewable_ok.value)
         reqBody['kdc-options'] = constants.encodeFlags(opts)
 
         seq_set(reqBody, 'sname', serverName.components_to_asn1)
@@ -138,29 +139,26 @@ class GetUserNoPreAuth:
 
         reqBody['realm'] = domain
 
-        now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
-        reqBody['till'] = KerberosTime.to_asn1(now)
-        reqBody['rtime'] = KerberosTime.to_asn1(now)
+        kerberos_infinity = datetime.datetime(2037, 9, 13, 2, 48, 5, tzinfo=datetime.timezone.utc)
+        reqBody['till'] = KerberosTime.to_asn1(kerberos_infinity)
+        reqBody['rtime'] = KerberosTime.to_asn1(kerberos_infinity)
         reqBody['nonce'] = random.getrandbits(31)
 
-        supportedCiphers = (int(constants.EncryptionTypes.rc4_hmac.value),)
+        # Real Windows clients offer the full etype list at once and let
+        # the KDC pick. Sending RC4-only first and falling back to AES is
+        # an Impacket-specific tell. Offer AES256, AES128, RC4 in that
+        # order to match Windows captures.
+        supportedCiphers = (
+            int(constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value),
+            int(constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value),
+            int(constants.EncryptionTypes.rc4_hmac.value),
+        )
 
         seq_set_iter(reqBody, 'etype', supportedCiphers)
 
         message = encoder.encode(asReq)
 
-        try:
-            r = sendReceive(message, domain, self.__kdcIP)
-        except KerberosError as e:
-            if e.getErrorCode() == constants.ErrorCodes.KDC_ERR_ETYPE_NOSUPP.value:
-                # RC4 not available, OK, let's ask for newer types
-                supportedCiphers = (int(constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value),
-                                    int(constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value),)
-                seq_set_iter(reqBody, 'etype', supportedCiphers)
-                message = encoder.encode(asReq)
-                r = sendReceive(message, domain, self.__kdcIP)
-            else:
-                raise e
+        r = sendReceive(message, domain, self.__kdcIP)
 
         # This should be the PREAUTH_FAILED packet or the actual TGT if the target principal has the
         # 'Do not require Kerberos preauthentication' set

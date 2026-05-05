@@ -251,14 +251,27 @@ class SQLSHELL(cmd.Cmd):
 
     def do_sp_start_job(self, s):
         try:
-            self.sql_query("DECLARE @job NVARCHAR(100);"
-                                "SET @job='IdxDefrag'+CONVERT(NVARCHAR(36),NEWID());"
-                                "EXEC msdb..sp_add_job @job_name=@job,@description='INDEXDEFRAG',"
-                                "@owner_login_name='sa',@delete_level=3;"
-                                "EXEC msdb..sp_add_jobstep @job_name=@job,@step_id=1,@step_name='Defragmentation',"
-                                "@subsystem='CMDEXEC',@command='%s',@on_success_action=1;"
-                                "EXEC msdb..sp_add_jobserver @job_name=@job;"
-                                "EXEC msdb..sp_start_job @job_name=@job;" % s)
+            # Vary the job name and description so the IdxDefrag/INDEXDEFRAG
+            # combo is not a fixed signature.
+            import random as _r
+            job_prefixes = ['SyncStats', 'BkpCleanup', 'CollectMetrics',
+                            'UpdateStatistics', 'Monitor', 'Maintenance']
+            descriptions = ['Index maintenance', 'Statistics update',
+                            'Routine maintenance', 'Telemetry export']
+            step_names = ['Run', 'Execute', 'Maintenance', 'Step1']
+            job_prefix = _r.choice(job_prefixes)
+            description = _r.choice(descriptions)
+            step_name = _r.choice(step_names)
+            self.sql_query(
+                "DECLARE @job NVARCHAR(100);"
+                "SET @job='%s_'+CONVERT(NVARCHAR(36),NEWID());"
+                "EXEC msdb..sp_add_job @job_name=@job,@description='%s',"
+                "@owner_login_name='sa',@delete_level=3;"
+                "EXEC msdb..sp_add_jobstep @job_name=@job,@step_id=1,@step_name='%s',"
+                "@subsystem='CMDEXEC',@command='%s',@on_success_action=1;"
+                "EXEC msdb..sp_add_jobserver @job_name=@job;"
+                "EXEC msdb..sp_start_job @job_name=@job;"
+                % (job_prefix, description, step_name, s))
             self.print_replies()
             self.sql.printRows()
         except:

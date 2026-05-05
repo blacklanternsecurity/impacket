@@ -123,7 +123,13 @@ def ldap3_kerberos_login(connection, target, user, password, domain='', lmhash='
     from impacket.krb5.kerberosv5 import getKerberosTGT, getKerberosTGS
     from impacket.krb5 import constants
     from impacket.krb5.types import Principal, KerberosTime, Ticket
+    from impacket.krb5.gssapi import (
+        CheckSumField,
+        GSS_C_CONF_FLAG, GSS_C_INTEG_FLAG, GSS_C_SEQUENCE_FLAG,
+        GSS_C_REPLAY_FLAG, GSS_C_MUTUAL_FLAG, GSS_C_DCE_STYLE,
+    )
     import datetime
+    import random as _random
 
     if TGT is not None or TGS is not None:
         useCache = False
@@ -179,6 +185,18 @@ def ldap3_kerberos_login(connection, target, user, password, domain='', lmhash='
 
     authenticator['cusec'] = now.microsecond
     authenticator['ctime'] = KerberosTime.to_asn1(now)
+
+    # Match the GSS-API framing Windows clients use: a checksum field of
+    # type 0x8003 with the GSS flags, plus a randomized seq-number. Without
+    # these fields the AP-REQ authenticator is a strong Impacket tell.
+    chkField = CheckSumField()
+    chkField['Lgth'] = 16
+    chkField['Flags'] = (GSS_C_INTEG_FLAG | GSS_C_SEQUENCE_FLAG |
+                          GSS_C_REPLAY_FLAG | GSS_C_MUTUAL_FLAG | GSS_C_DCE_STYLE)
+    authenticator['cksum'] = noValue
+    authenticator['cksum']['cksumtype'] = 0x8003
+    authenticator['cksum']['checksum'] = chkField.getData()
+    authenticator['seq-number'] = _random.SystemRandom().randint(1, 0x7fffffff)
 
     encodedAuthenticator = encoder.encode(authenticator)
 

