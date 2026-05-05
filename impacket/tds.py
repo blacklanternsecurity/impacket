@@ -34,6 +34,7 @@ from __future__ import division
 from __future__ import print_function
 
 # Native SSL support for in memory handshake
+import os
 import ssl
 
 # Used to compute the CBT TOKEN
@@ -941,12 +942,19 @@ class MSSQL:
     def preLogin(self):
         # First we initiate the structure
         prelogin = TDS_PRELOGIN()
-        # Then we fill the version of the MSSQL client we use
-        prelogin["Version"] = b"\x08\x00\x01\x55\x00\x00"
+        # SSMS-style client version. Pick from a small pool of realistic values
+        # so the prelogin Version field is not a fixed fingerprint.
+        _ssms_versions = [
+            b"\x12\x00\x18\xa6\x00\x00",  # 18.0.6310
+            b"\x13\x00\x1a\x9a\x00\x00",  # 19.0.6810
+            b"\x14\x00\x1b\xb4\x00\x00",  # 20.0.7092
+            b"\x0f\x00\x0b\xb8\x00\x00",  # 15.0.3000 (sqlcmd-style)
+        ]
+        prelogin["Version"] = random.choice(_ssms_versions)
         # We specify we support encryption but don't want it
         prelogin["Encryption"] = TDS_ENCRYPT_OFF
         # Random threadID because we don't care about this
-        prelogin["ThreadID"] = struct.pack("<L", random.randint(0, 65535))
+        prelogin["ThreadID"] = struct.pack("<L", random.randint(2000, 0x3fffffff))
         # The instance name
         prelogin["Instance"] = b"MSSQLServer\x00"
         # We send the prelogin packet, receive the response from the server
@@ -1251,7 +1259,8 @@ class MSSQL:
         login["AppName"] = self.application_name.encode("utf-16le")
         login["ServerName"] = self.remoteName.encode("utf-16le")
         login["CltIntName"] = login["AppName"]
-        login["ClientPID"] = random.randint(0, 1024)
+        login["ClientPID"] = random.randint(2000, 0x3fffffff)
+        login["ClientID"] = os.urandom(6)
         login["PacketSize"] = self.packetSize
         if database is not None:
             login["Database"] = database.encode("utf-16le")
@@ -1439,7 +1448,7 @@ class MSSQL:
         if self.tlsSocket:
             chkField["Bnd"] = self.generate_cbt_from_tls_unique()
         authenticator["cksum"]["checksum"] = chkField.getData()
-        authenticator["seq-number"] = 0
+        authenticator["seq-number"] = random.SystemRandom().randint(1, 0x7fffffff)
         encodedAuthenticator = encoder.encode(authenticator)
 
         # Key Usage 11
@@ -1522,7 +1531,8 @@ class MSSQL:
         login["AppName"] = self.application_name.encode("utf-16le")
         login["ServerName"] = self.remoteName.encode("utf-16le")
         login["CltIntName"] = login["AppName"]
-        login["ClientPID"] = random.randint(0, 1024)
+        login["ClientPID"] = random.randint(2000, 0x3fffffff)
+        login["ClientID"] = os.urandom(6)
         login["PacketSize"] = self.packetSize
         if database is not None:
             login["Database"] = database.encode("utf-16le")

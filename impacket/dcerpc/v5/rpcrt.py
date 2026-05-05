@@ -22,6 +22,8 @@
 # 
 
 import logging
+import os
+import random
 import socket
 import sys
 from binascii import unhexlify
@@ -1470,6 +1472,7 @@ class DCERPC_v5(DCERPC):
         self.transfer_syntax = uuidtup_to_bin(('8a885d04-1ceb-11c9-9fe8-08002b104860', '2.0'))
         self.__callid = 1
         self._ctx = 0
+        self.__auth_ctx_base = random.SystemRandom().randint(1, 0x7fffffff)
         self.__sessionKey = None
         self.__max_xmit_size  = 0
         self.__flags = 0
@@ -1578,11 +1581,11 @@ class DCERPC_v5(DCERPC):
             sec_trailer = SEC_TRAILER()
             sec_trailer['auth_type']   = self.__auth_type
             sec_trailer['auth_level']  = self.__auth_level
-            sec_trailer['auth_ctx_id'] = self._ctx + 79231 
+            sec_trailer['auth_ctx_id'] = (self.__auth_ctx_base + self._ctx) & 0xffffffff
 
             pad = (4 - (len(packet.get_packet()) % 4)) % 4
             if pad != 0:
-               packet['pduData'] += b'\xFF'*pad
+               packet['pduData'] += b'\x00'*pad
                sec_trailer['auth_pad_len']=pad
 
             packet['sec_trailer'] = sec_trailer
@@ -1680,7 +1683,7 @@ class DCERPC_v5(DCERPC):
             sec_trailer = SEC_TRAILER()
             sec_trailer['auth_type'] = self.__auth_type
             sec_trailer['auth_level'] = self.__auth_level
-            sec_trailer['auth_ctx_id'] = self._ctx + 79231 
+            sec_trailer['auth_ctx_id'] = (self.__auth_ctx_base + self._ctx) & 0xffffffff
 
             if response is not None:
                 if self.__auth_type == RPC_C_AUTHN_GSS_NEGOTIATE:
@@ -1725,11 +1728,11 @@ class DCERPC_v5(DCERPC):
             sec_trailer['auth_type'] = self.__auth_type
             sec_trailer['auth_level'] = self.__auth_level
             sec_trailer['auth_pad_len'] = 0
-            sec_trailer['auth_ctx_id'] = self._ctx + 79231 
+            sec_trailer['auth_ctx_id'] = (self.__auth_ctx_base + self._ctx) & 0xffffffff
 
             pad = (4 - (len(rpc_packet.get_packet()) % 4)) % 4
             if pad != 0:
-                rpc_packet['pduData'] += b'\xBB'*pad
+                rpc_packet['pduData'] += b'\x00'*pad
                 sec_trailer['auth_pad_len']=pad
 
             rpc_packet['sec_trailer'] = sec_trailer.getData()

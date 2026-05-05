@@ -33,6 +33,7 @@
 from __future__ import division
 from __future__ import print_function
 
+import os
 import socket
 import ntpath
 import random
@@ -194,7 +195,7 @@ class SMB3:
         self.RequireMessageSigning = False    #
         self.ConnectionTable = {}
         self.GlobalFileTable = {}
-        self.ClientGuid = ''.join([random.choice(string.ascii_letters) for i in range(16)])
+        self.ClientGuid = os.urandom(16)
         # Only for SMB 3.0
         self.EncryptionAlgorithmList = ['AES-CCM']
         self.MaxDialect = []

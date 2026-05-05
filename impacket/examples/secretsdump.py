@@ -532,8 +532,8 @@ class RemoteOperations:
         drs['dwReplEpoch'] = 0
         drs['dwFlagsExt'] = 0
         drs['ConfigObjGUID'] = drsuapi.NULLGUID
-        # I'm uber potential (c) Ben
-        drs['dwExtCaps'] = 0xffffffff
+        # Advertise a realistic DC-style capability set rather than 0xffffffff
+        drs['dwExtCaps'] = 0x0007FFFF
         request['pextClient']['cb'] = len(drs)
         request['pextClient']['rgb'] = list(drs.getData())
         resp = self.__drsr.request(request)

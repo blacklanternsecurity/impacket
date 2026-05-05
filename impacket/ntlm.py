@@ -12,6 +12,7 @@
 from __future__ import division
 from __future__ import print_function
 import base64
+import os
 import struct
 import calendar
 import time
@@ -662,7 +663,7 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
     # method we will create a valid ChallengeResponse
     ntlmChallengeResponse = NTLMAuthChallengeResponse(user, password, ntlmChallenge['challenge'])
 
-    clientChallenge = b("".join([random.choice(string.digits+string.ascii_letters) for _ in range(8)]))
+    clientChallenge = os.urandom(8)
 
     serverName = ntlmChallenge['TargetInfoFields']
 

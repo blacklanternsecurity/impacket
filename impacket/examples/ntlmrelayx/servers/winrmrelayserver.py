@@ -19,9 +19,11 @@ import http.server
 import socketserver
 import socket
 import base64
+import os
 import random
 import struct
 import string
+import time
 from threading import Thread
 from six import PY2, b
 
@@ -350,13 +352,29 @@ class WinRMRelayServer(Thread):
 
                 challengeMessage = ntlm.NTLMAuthChallenge()
                 challengeMessage['flags'] = ansFlags
-                challengeMessage['domain_name'] = ""
-                challengeMessage['challenge'] = ''.join(random.choice(string.printable) for _ in range(64))
-                challengeMessage['TargetInfoFields'] = ntlm.AV_PAIRS()
-                challengeMessage['TargetInfoFields_len'] = 0
-                challengeMessage['TargetInfoFields_max_len'] = 0
+                fake_host = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(random.randint(8, 15)))
+                fake_domain = ''.join(random.choice(string.ascii_uppercase) for _ in range(random.randint(4, 12)))
+                fake_dns_host = '%s.%s.local' % (fake_host.lower(), fake_domain.lower())
+                fake_dns_domain = '%s.local' % fake_domain.lower()
+                avp = ntlm.AV_PAIRS()
+                avp[ntlm.NTLMSSP_AV_HOSTNAME] = fake_host.encode('utf-16-le')
+                avp[ntlm.NTLMSSP_AV_DOMAINNAME] = fake_domain.encode('utf-16-le')
+                avp[ntlm.NTLMSSP_AV_DNS_HOSTNAME] = fake_dns_host.encode('utf-16-le')
+                avp[ntlm.NTLMSSP_AV_DNS_DOMAINNAME] = fake_dns_domain.encode('utf-16-le')
+                avp[ntlm.NTLMSSP_AV_TIME] = struct.pack('<Q', (int(time.time()) + 11644473600) * 10000000)
+                challengeMessage['domain_name'] = fake_domain.encode('utf-16-le')
+                challengeMessage['challenge'] = os.urandom(8)
+                challengeMessage['TargetInfoFields'] = avp
+                avp_data = avp.getData()
+                challengeMessage['TargetInfoFields_len'] = len(avp_data)
+                challengeMessage['TargetInfoFields_max_len'] = len(avp_data)
                 challengeMessage['TargetInfoFields_offset'] = 40 + 16
-                challengeMessage['Version'] = b'\xff' * 8
+                version = ntlm.VERSION()
+                version['ProductMajorVersion'] = 10
+                version['ProductMinorVersion'] = 0
+                version['ProductBuild'] = random.choice([19041, 19042, 19044, 20348, 22621])
+                version['NTLMRevisionCurrent'] = 0x0F
+                challengeMessage['Version'] = version.getData()
                 challengeMessage['VersionLen'] = 8
 
                 self.do_AUTHHEAD(message=b'Negotiate ' + base64.b64encode(challengeMessage.getData()),proxy=proxy)

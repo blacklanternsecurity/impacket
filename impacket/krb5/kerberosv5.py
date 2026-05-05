@@ -664,7 +664,7 @@ def getKerberosType1(username, password, domain, lmhash, nthash, aesKey='', TGT 
     chkField['Flags'] = GSS_C_CONF_FLAG | GSS_C_INTEG_FLAG | GSS_C_SEQUENCE_FLAG | GSS_C_REPLAY_FLAG | GSS_C_MUTUAL_FLAG | GSS_C_DCE_STYLE
     #chkField['Flags'] = GSS_C_INTEG_FLAG | GSS_C_SEQUENCE_FLAG | GSS_C_REPLAY_FLAG | GSS_C_MUTUAL_FLAG | GSS_C_DCE_STYLE
     authenticator['cksum']['checksum'] = chkField.getData()
-    authenticator['seq-number'] = 0
+    authenticator['seq-number'] = random.SystemRandom().randint(1, 0x7fffffff)
     encodedAuthenticator = encoder.encode(authenticator)
 
     # Key Usage 11

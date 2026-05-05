@@ -18,8 +18,10 @@
 
 from __future__ import absolute_import
 from __future__ import print_function
+import os
 import re
 import binascii
+import uuid as _stdlib_uuid
 
 from random import randrange
 from struct import pack, unpack
@@ -28,9 +30,10 @@ EMPTY_UUID = b'\x00'*16
 
 
 def generate():
-    # UHm... crappy Python has an maximum integer of 2**31-1.
-    top = (1<<31)-1
-    return pack("IIII", randrange(top), randrange(top), randrange(top), randrange(top))
+    # RFC 4122 v4 UUID, encoded in the wire layout impacket uses elsewhere
+    # (first three components little-endian, last two big-endian).
+    u = _stdlib_uuid.uuid4()
+    return string_to_bin(str(u))
 
 
 def bin_to_string(uuid):
