@@ -471,7 +471,7 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
 def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey, renew = False):
     tgsflags = [f for f in environ.get('KRBTGSFLAGS', "").split(',') if f]
     if not tgsflags:
-        tgsflags = ['renewable']
+        tgsflags = ['renewable', 'canonicalize']
     # Decode the TGT
     try:
         decodedTGT = decoder.decode(tgt, asn1Spec = AS_REP())[0]
@@ -540,6 +540,7 @@ def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey, renew =
         opts.append( constants.KDCOptions.renew.value )
 
     reqBody['kdc-options'] = constants.encodeFlags(opts)
+    serverName.type = constants.PrincipalNameType.NT_PRINCIPAL.value
     seq_set(reqBody, 'sname', serverName.components_to_asn1)
     reqBody['realm'] = domain
 
@@ -549,10 +550,14 @@ def getKerberosTGS(serverName, domain, kdcHost, tgt, cipher, sessionKey, renew =
     reqBody['nonce'] = rand.getrandbits(31)
     seq_set_iter(reqBody, 'etype',
                       (
-                          int(constants.EncryptionTypes.rc4_hmac.value),
+                          int(constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value),
+                          int(constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value),
+                          int(constants.EncryptionTypes.aes256_cts_hmac_sha384_192.value),
+                          int(constants.EncryptionTypes.aes128_cts_hmac_sha256_128.value),
                           int(constants.EncryptionTypes.des3_cbc_sha1_kd.value),
-                          int(constants.EncryptionTypes.des_cbc_md5.value),
-                          int(cipher.enctype)
+                          int(constants.EncryptionTypes.rc4_hmac.value),
+                          int(constants.EncryptionTypes.camellia128_cts_cmac.value),
+                          int(constants.EncryptionTypes.camellia256_cts_cmac.value),
                        )
                 )
 
