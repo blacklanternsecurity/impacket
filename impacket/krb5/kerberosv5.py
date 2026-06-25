@@ -370,6 +370,10 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
                 encryptionTypesData[etype['etype']] = salt.encode('utf-8')
 
     enctype = supportedCiphers[0]
+
+    if preAuth is True and enctype not in encryptionTypesData and encryptionTypesData:
+        enctype = list(encryptionTypesData.keys())[0]
+
     cipher = _enctype_table[enctype]
 
     if isinstance(nthash, bytes) and nthash != b'':
@@ -377,11 +381,9 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
     elif aesKey != b'':
         key = Key(cipher.enctype, aesKey)
     else:
-        key = cipher.string_to_key(password, encryptionTypesData[enctype], None)
-
-    if preAuth is True:
-        if enctype in encryptionTypesData is False:
+        if enctype not in encryptionTypesData:
             raise Exception('No Encryption Data Available!')
+        key = cipher.string_to_key(password, encryptionTypesData[enctype], None)
 
         # Step 2: Authenticated AS-REQ with PA_ENC_TIMESTAMP (matching kinit)
         timeStamp = PA_ENC_TS_ENC()
