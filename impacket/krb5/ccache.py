@@ -637,13 +637,23 @@ class CCache:
             creds = ccache.getCredential(principal)
 
             if creds is None:
-                # Cross-realm: the ticket might be stored under a different realm
+                # Cross-realm: try matching by exact SPN with any realm,
+                # then by hostname with any service type and realm
+                targetHost = target.upper().split('/')[1] if '/' in target else target.upper()
                 for c in ccache.credentials:
-                    serverPrincipal = c['server'].prettyPrint().decode('utf-8')
-                    if serverPrincipal.upper().startswith(target.upper() + '@'):
+                    serverPrincipal = c['server'].prettyPrint().decode('utf-8').upper()
+                    # Exact SPN match with different realm
+                    if serverPrincipal.startswith(target.upper() + '@'):
                         creds = c
-                        principal = serverPrincipal.upper()
+                        principal = serverPrincipal
                         LOG.debug('Found cross-realm credential for %s' % principal)
+                        break
+                    # Same hostname, different service type or realm
+                    cachedHost = serverPrincipal.split('/')[1].split('@')[0] if '/' in serverPrincipal else None
+                    if cachedHost and cachedHost == targetHost:
+                        creds = c
+                        principal = serverPrincipal
+                        LOG.debug('Found cross-realm credential for %s (matched by hostname)' % principal)
                         break
 
         TGT = None
