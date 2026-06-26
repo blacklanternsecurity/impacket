@@ -276,6 +276,10 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
         return tgt, cipher, key, sessionKey
 
     # Step 1: Probe AS-REQ without PA_ENC_TIMESTAMP (matching kinit)
+    pacRequest = KERB_PA_PAC_REQUEST()
+    pacRequest['include-pac'] = requestPAC
+    encodedPacRequest = encoder.encode(pacRequest)
+
     asReq = AS_REQ()
     asReq['pvno'] = 5
     asReq['msg-type'] = int(constants.ApplicationTagNumbers.AS_REQ.value)
@@ -287,6 +291,9 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
     asReq['padata'][1] = noValue
     asReq['padata'][1]['padata-type'] = int(constants.PreAuthenticationDataTypes.PA_REQ_ENC_PA_REP.value)
     asReq['padata'][1]['padata-value'] = b''
+    asReq['padata'][2] = noValue
+    asReq['padata'][2]['padata-type'] = int(constants.PreAuthenticationDataTypes.PA_PAC_REQUEST.value)
+    asReq['padata'][2]['padata-value'] = encodedPacRequest
 
     reqBody = seq_set(asReq, 'req-body')
 
