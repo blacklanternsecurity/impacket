@@ -636,11 +636,31 @@ class CCache:
             principal = '%s@%s' % (target.upper(), domain.upper())
             creds = ccache.getCredential(principal)
 
+            if creds is None:
+                # Cross-realm: the ticket might be stored under a different realm
+                for c in ccache.credentials:
+                    serverPrincipal = c['server'].prettyPrint().decode('utf-8')
+                    if serverPrincipal.upper().startswith(target.upper() + '@'):
+                        creds = c
+                        principal = serverPrincipal.upper()
+                        LOG.debug('Found cross-realm credential for %s' % principal)
+                        break
+
         TGT = None
         TGS = None
         if creds is None:
+            # Try TGT for the specified domain first
             principal = 'krbtgt/%s@%s' % (domain.upper(), domain.upper())
             creds = ccache.getCredential(principal)
+            if creds is None:
+                # Cross-realm: look for any krbtgt ticket
+                for c in ccache.credentials:
+                    serverPrincipal = c['server'].prettyPrint().decode('utf-8')
+                    if serverPrincipal.upper().startswith('KRBTGT/'):
+                        creds = c
+                        principal = serverPrincipal.upper()
+                        LOG.debug('Found cross-realm TGT: %s' % principal)
+                        break
             if creds is not None:
                 LOG.debug('Using TGT from cache')
                 TGT = creds.toTGT()
