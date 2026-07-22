@@ -415,6 +415,7 @@ class TICKETER:
                 
                 cipher = _enctype_table[creds['key']['keytype']]
                 sessionKey = Key(creds['key']['keytype'], creds['key']['keyvalue'])
+                oldSessionKey = sessionKey
                 
                 # If we have the krbtgt AES key, decrypt the ticket and extract domain info from PAC
                 if self.__options.aesKey and (not self.__options.domain_sid or not self.__options.user_id):
@@ -501,48 +502,52 @@ class TICKETER:
                 tgs, cipher, oldSessionKey, sessionKey = getKerberosTGS(serverName, self.__domain, None, tgt, cipher,
                                                                         sessionKey)
                 kdcRep = decoder.decode(tgs, asn1Spec=TGS_REP())[0]
-            self.__requested_ticket_times = self._extract_reply_ticket_times(kdcRep, oldSessionKey)
+
+            if not self.__options.k:
+                self.__requested_ticket_times = self._extract_reply_ticket_times(kdcRep, oldSessionKey)
 
             # Let's check we have all the necessary data based on the ciphers used. Boring checks
-            ticketCipher = int(kdcRep['ticket']['enc-part']['etype'])
-            encPartCipher = int(kdcRep['enc-part']['etype'])
+            # Skip these checks for ccache-sourced TGTs since the etype fields may not reflect the actual cipher
+            if not self.__options.k:
+                ticketCipher = int(kdcRep['ticket']['enc-part']['etype'])
+                encPartCipher = int(kdcRep['enc-part']['etype'])
 
-            if (ticketCipher == EncryptionTypes.rc4_hmac.value or encPartCipher == EncryptionTypes.rc4_hmac.value) and \
-                            self.__options.nthash is None:
-                logging.critical('rc4_hmac is used in this ticket and you haven\'t specified the -nthash parameter. '
-                                 'Can\'t continue ( or try running again w/o the -request option)')
-                return None, None
+                if (ticketCipher == EncryptionTypes.rc4_hmac.value or encPartCipher == EncryptionTypes.rc4_hmac.value) and \
+                                self.__options.nthash is None:
+                    logging.critical('rc4_hmac is used in this ticket and you haven\'t specified the -nthash parameter. '
+                                     'Can\'t continue ( or try running again w/o the -request option)')
+                    return None, None
 
-            if (ticketCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value or
-                encPartCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value) and \
-                self.__options.aesKey is None:
-                logging.critical(
-                    'aes128_cts_hmac_sha1_96 is used in this ticket and you haven\'t specified the -aesKey parameter. '
-                    'Can\'t continue (or try running again w/o the -request option)')
-                return None, None
+                if (ticketCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value or
+                    encPartCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value) and \
+                    self.__options.aesKey is None:
+                    logging.critical(
+                        'aes128_cts_hmac_sha1_96 is used in this ticket and you haven\'t specified the -aesKey parameter. '
+                        'Can\'t continue (or try running again w/o the -request option)')
+                    return None, None
 
-            if (ticketCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value or
-                encPartCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value) and \
-                self.__options.aesKey is not None and len(self.__options.aesKey) > 32:
-                logging.critical(
-                    'aes128_cts_hmac_sha1_96 is used in this ticket and the -aesKey you specified is not aes128. '
-                    'Can\'t continue (or try running again w/o the -request option)')
-                return None, None
+                if (ticketCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value or
+                    encPartCipher == EncryptionTypes.aes128_cts_hmac_sha1_96.value) and \
+                    self.__options.aesKey is not None and len(self.__options.aesKey) > 32:
+                    logging.critical(
+                        'aes128_cts_hmac_sha1_96 is used in this ticket and the -aesKey you specified is not aes128. '
+                        'Can\'t continue (or try running again w/o the -request option)')
+                    return None, None
 
-            if (ticketCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value or
-                 encPartCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value) and self.__options.aesKey is None:
-                logging.critical(
-                    'aes256_cts_hmac_sha1_96 is used in this ticket and you haven\'t specified the -aesKey parameter. '
-                    'Can\'t continue (or try running again w/o the -request option)')
-                return None, None
+                if (ticketCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value or
+                     encPartCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value) and self.__options.aesKey is None:
+                    logging.critical(
+                        'aes256_cts_hmac_sha1_96 is used in this ticket and you haven\'t specified the -aesKey parameter. '
+                        'Can\'t continue (or try running again w/o the -request option)')
+                    return None, None
 
-            if ( ticketCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value or
-                 encPartCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value) and \
-                 self.__options.aesKey is not None and len(self.__options.aesKey) < 64:
-                logging.critical(
-                    'aes256_cts_hmac_sha1_96 is used in this ticket and the -aesKey you specified is not aes256. '
-                    'Can\'t continue')
-                return None, None
+                if ( ticketCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value or
+                     encPartCipher == EncryptionTypes.aes256_cts_hmac_sha1_96.value) and \
+                     self.__options.aesKey is not None and len(self.__options.aesKey) < 64:
+                    logging.critical(
+                        'aes256_cts_hmac_sha1_96 is used in this ticket and the -aesKey you specified is not aes256. '
+                        'Can\'t continue')
+                    return None, None
             kdcRep['cname']['name-type'] = PrincipalNameType.NT_PRINCIPAL.value
             kdcRep['cname']['name-string'] = noValue
             kdcRep['cname']['name-string'][0] = self.__options.impersonate or self.__target
@@ -1109,12 +1114,7 @@ class TICKETER:
     def saveTicket(self, ticket, sessionKey):
         logging.info('Saving/Updating ticket in %s' % (self.__target.replace('/', '.') + '.ccache'))
         from impacket.krb5.ccache import CCache
-        from os import getenv, path
-        krb5 = getenv('KRB5CCNAME')
-        if krb5 and path.isfile(krb5):
-            ccache = CCache.loadFile(krb5)
-        else:
-            ccache = CCache()
+        ccache = CCache()
 
         if self.__server == self.__domain:
             ccache.fromTGT(ticket, sessionKey, sessionKey)
