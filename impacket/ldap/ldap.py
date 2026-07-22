@@ -89,13 +89,14 @@ MODIFY_REPLACE = 2
 MODIFY_INCREMENT = 3
 
 class LDAPConnection:
-    def __init__(self, url, baseDN='', dstIp=None, signing=True):
+    def __init__(self, url, baseDN='', dstIp=None, signing=True, timeout=None):
         """
         LDAPConnection class
 
         :param string url:
         :param string baseDN:
         :param string dstIp:
+        :param timeout: connection timeout in seconds (None = blocking)
 
         :return: a LDAP instance, if not raises a LDAPSessionError exception
         """
@@ -148,6 +149,7 @@ class LDAPConnection:
         except OSError as e:
             raise OSError(f"Connection error ({targetHost}:{self._dstPort})") from e
 
+        self._socket.settimeout(timeout)
         if not self._SSL:
             self._socket.connect(sa)
         else:
@@ -158,6 +160,7 @@ class LDAPConnection:
             ctx.set_options(SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION)
             self._socket = SSL.Connection(ctx, self._socket)
             self._socket.connect(sa)
+            self._socket.settimeout(None)   # do_handshake() on a non-blocking (timeout-mode) socket raises WantReadError
             self._socket.do_handshake()
 
             # From: https://github.com/ly4k/ldap3/commit/87f5760e5a68c2f91eac8ba375f4ea3928e2b9e0#diff-c782b790cfa0a948362bf47d72df8ddd6daac12e5757afd9d371d89385b27ef6R1383
@@ -165,7 +168,7 @@ class LDAPConnection:
             # Ugly but effective, to get the digest of the X509 DER in bytes
             peer_cert_digest_str = self._socket.get_peer_certificate().digest('sha256').decode()
             peer_cert_digest_bytes = bytes.fromhex(peer_cert_digest_str.replace(':', ''))
-        
+
             channel_binding_struct = b''
             initiator_address = b'\x00'*8
             acceptor_address = b'\x00'*8
@@ -179,6 +182,7 @@ class LDAPConnection:
             channel_binding_struct += acceptor_address
             channel_binding_struct += application_data
             self.channel_binding_value = md5(channel_binding_struct).digest()
+        self._socket.settimeout(None)
 
     def kerberosLogin(self, user, password, domain='', lmhash='', nthash='', aesKey='', kdcHost=None, TGT=None,
                       TGS=None, useCache=True):
