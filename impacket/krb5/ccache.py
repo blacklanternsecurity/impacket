@@ -663,10 +663,14 @@ class CCache:
             principal = 'krbtgt/%s@%s' % (domain.upper(), domain.upper())
             creds = ccache.getCredential(principal)
             if creds is None:
-                # Cross-realm: look for any krbtgt ticket
+                # Cross-realm: look for a referral TGT to the requested domain
+                # (krbtgt/<target-realm>@<source-realm>). Requiring the target
+                # realm to match the requested domain keeps parseFile honest —
+                # asking for a domain not represented in the cache still returns None.
+                prefix = 'KRBTGT/' + domain.upper() + '@'
                 for c in ccache.credentials:
                     serverPrincipal = c['server'].prettyPrint().decode('utf-8')
-                    if serverPrincipal.upper().startswith('KRBTGT/'):
+                    if serverPrincipal.upper().startswith(prefix):
                         creds = c
                         principal = serverPrincipal.upper()
                         LOG.debug('Found cross-realm TGT: %s' % principal)

@@ -33,6 +33,7 @@ class TicketerTests(unittest.TestCase):
             spn=None,
             keytab=None,
             request=False,
+            k=False,
             hashes=None,
             aesKey='a' * 64,
             nthash=None,
