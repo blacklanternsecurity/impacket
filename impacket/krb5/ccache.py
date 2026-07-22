@@ -636,11 +636,45 @@ class CCache:
             principal = '%s@%s' % (target.upper(), domain.upper())
             creds = ccache.getCredential(principal)
 
+            if creds is None:
+                # Cross-realm: try matching by exact SPN with any realm,
+                # then by hostname with any service type and realm
+                targetHost = target.upper().split('/')[1] if '/' in target else target.upper()
+                for c in ccache.credentials:
+                    serverPrincipal = c['server'].prettyPrint().decode('utf-8').upper()
+                    # Exact SPN match with different realm
+                    if serverPrincipal.startswith(target.upper() + '@'):
+                        creds = c
+                        principal = serverPrincipal
+                        LOG.debug('Found cross-realm credential for %s' % principal)
+                        break
+                    # Same hostname, different service type or realm
+                    cachedHost = serverPrincipal.split('/')[1].split('@')[0] if '/' in serverPrincipal else None
+                    if cachedHost and cachedHost == targetHost:
+                        creds = c
+                        principal = serverPrincipal
+                        LOG.debug('Found cross-realm credential for %s (matched by hostname)' % principal)
+                        break
+
         TGT = None
         TGS = None
         if creds is None:
+            # Try TGT for the specified domain first
             principal = 'krbtgt/%s@%s' % (domain.upper(), domain.upper())
             creds = ccache.getCredential(principal)
+            if creds is None:
+                # Cross-realm: look for a referral TGT to the requested domain
+                # (krbtgt/<target-realm>@<source-realm>). Requiring the target
+                # realm to match the requested domain keeps parseFile honest —
+                # asking for a domain not represented in the cache still returns None.
+                prefix = 'KRBTGT/' + domain.upper() + '@'
+                for c in ccache.credentials:
+                    serverPrincipal = c['server'].prettyPrint().decode('utf-8')
+                    if serverPrincipal.upper().startswith(prefix):
+                        creds = c
+                        principal = serverPrincipal.upper()
+                        LOG.debug('Found cross-realm TGT: %s' % principal)
+                        break
             if creds is not None:
                 LOG.debug('Using TGT from cache')
                 TGT = creds.toTGT()

@@ -111,6 +111,8 @@ class PreAuthenticationDataTypes(Enum):
     PA_ENCRYPTED_CHALLENGE     = 138
     KERB_KEY_LIST_REQ          = 161
     KERB_KEY_LIST_REP          = 162
+    PA_REQ_ENC_PA_REP          = 149
+    PA_AS_FRESHNESS            = 150
     PA_SUPPORTED_ENCTYPES      = 165
     PA_PAC_OPTIONS             = 167
     KERB_SUPERSEDED_BY_USER    = 170
@@ -465,8 +467,12 @@ class EncryptionTypes(Enum):
     des3_cbc_sha1_kd             = 16
     aes128_cts_hmac_sha1_96      = 17
     aes256_cts_hmac_sha1_96      = 18
+    aes128_cts_hmac_sha256_128   = 19
+    aes256_cts_hmac_sha384_192   = 20
     rc4_hmac                     = 23
     rc4_hmac_exp                 = 24
+    camellia128_cts_cmac         = 25
+    camellia256_cts_cmac         = 26
     subkey_keymaterial           = 65
     rc4_hmac_old_exp             = -135
 
