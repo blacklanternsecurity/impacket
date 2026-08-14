@@ -10,15 +10,22 @@
 # for more information.
 #
 # Description:
-#   WMI multitool for registry, service, process, and enumeration
-#   operations via DCOM. No processes are spawned on the target.
+#   WMI multitool for remote Windows operations via DCOM.
+#   No processes are spawned on the target.
 #
-#   Subcommands:
-#     reg      - Registry operations via StdRegProv (root/default)
-#     service  - Service management via Win32_Service
-#     process  - Process listing and termination via Win32_Process
-#     enum     - System enumeration (sysinfo, users, groups, shares,
-#                disks, network adapters)
+#   Modules:
+#     reg       - Registry operations via StdRegProv
+#     service   - Service management via Win32_Service
+#     process   - Process listing/termination via Win32_Process
+#     enum      - System enumeration (sysinfo, users, groups, shares,
+#                 disks, network, startup, hotfix, sessions, env, bios)
+#     defender  - Windows Defender management (exclusions, status)
+#     av        - Security product detection (AV, firewall)
+#     eventlog  - Event log listing, reading, and clearing
+#     net       - Network connections and DNS cache (netstat equiv)
+#     rdp       - Remote Desktop enable/disable/status
+#     file      - File search, copy, delete via CIM_DataFile
+#     share     - Network share creation and deletion
 #
 # Author:
 #   Black Lantern Security
@@ -53,6 +60,14 @@ HIVE_MAP = {
 TYPE_MAP = {
     1: 'REG_SZ', 2: 'REG_EXPAND_SZ', 3: 'REG_BINARY',
     4: 'REG_DWORD', 7: 'REG_MULTI_SZ', 11: 'REG_QWORD',
+}
+
+NAMESPACE_MAP = {
+    'reg':      '//./root/default',
+    'defender': '//./root/Microsoft/Windows/Defender',
+    'av':       '//./root/SecurityCenter2',
+    'net':      '//./root/StandardCimv2',
+    'rdp':      '//./root/cimv2/TerminalServices',
 }
 
 
@@ -112,6 +127,28 @@ def _iter_query(iWbemServices, query):
         iEnum.RemRelease()
 
 
+def _print_query(iWbemServices, title, query, fields=None):
+    print('[*] %s' % title)
+    count = 0
+    for props in _iter_query(iWbemServices, query):
+        if count > 0:
+            print('')
+        keys = fields if fields else sorted(props.keys())
+        for key in keys:
+            if key in props:
+                val = props[key]['value']
+                if isinstance(val, list):
+                    val = ', '.join(str(v) for v in val) if val else ''
+                print('  %-30s %s' % (key + ':', val))
+        count += 1
+    if count == 0:
+        print('  (no results)')
+    print('')
+
+
+# ---------------------------------------------------------------------------
+# Registry operations (StdRegProv, root/default)
+# ---------------------------------------------------------------------------
 class RegOps:
     def __init__(self, iWbemServices):
         self.reg, _ = iWbemServices.GetObject('StdRegProv')
@@ -241,6 +278,9 @@ class RegOps:
             return False
 
 
+# ---------------------------------------------------------------------------
+# Service operations (Win32_Service, root/cimv2)
+# ---------------------------------------------------------------------------
 class ServiceOps:
     def __init__(self, iWbemServices):
         self.__iWbemServices = iWbemServices
@@ -301,6 +341,9 @@ class ServiceOps:
         print('[-] Service \'%s\' not found' % name)
 
 
+# ---------------------------------------------------------------------------
+# Process operations (Win32_Process, root/cimv2)
+# ---------------------------------------------------------------------------
 class ProcessOps:
     def __init__(self, iWbemServices):
         self.__iWbemServices = iWbemServices
@@ -335,30 +378,15 @@ class ProcessOps:
         print('[-] Process with PID %d not found' % pid)
 
 
+# ---------------------------------------------------------------------------
+# Enumeration operations (various cimv2 classes)
+# ---------------------------------------------------------------------------
 class EnumOps:
     def __init__(self, iWbemServices):
         self.__iWbemServices = iWbemServices
 
-    def _print_query(self, title, query, fields=None):
-        print('[*] %s' % title)
-        count = 0
-        for props in _iter_query(self.__iWbemServices, query):
-            if count > 0:
-                print('')
-            keys = fields if fields else sorted(props.keys())
-            for key in keys:
-                if key in props:
-                    val = props[key]['value']
-                    if isinstance(val, list):
-                        val = ', '.join(str(v) for v in val) if val else ''
-                    print('  %-30s %s' % (key + ':', val))
-            count += 1
-        if count == 0:
-            print('  (no results)')
-        print('')
-
     def sysinfo(self):
-        self._print_query(
+        _print_query(self.__iWbemServices,
             'Operating System',
             'SELECT Caption, Version, BuildNumber, OSArchitecture, '
             'CSName, RegisteredUser, LastBootUpTime, InstallDate, '
@@ -367,7 +395,7 @@ class EnumOps:
             ['Caption', 'Version', 'BuildNumber', 'OSArchitecture',
              'CSName', 'RegisteredUser', 'LastBootUpTime', 'InstallDate',
              'TotalVisibleMemorySize', 'FreePhysicalMemory'])
-        self._print_query(
+        _print_query(self.__iWbemServices,
             'Computer System',
             'SELECT Name, Domain, DomainRole, Manufacturer, Model, '
             'NumberOfProcessors, TotalPhysicalMemory, UserName '
@@ -376,7 +404,7 @@ class EnumOps:
              'NumberOfProcessors', 'TotalPhysicalMemory', 'UserName'])
 
     def users(self):
-        self._print_query(
+        _print_query(self.__iWbemServices,
             'Local User Accounts',
             'SELECT Name, FullName, Description, Disabled, Lockout, '
             'PasswordRequired, SID FROM Win32_UserAccount',
@@ -384,19 +412,19 @@ class EnumOps:
              'PasswordRequired', 'SID'])
 
     def groups(self):
-        self._print_query(
+        _print_query(self.__iWbemServices,
             'Local Groups',
             'SELECT Name, Description, SID FROM Win32_Group',
             ['Name', 'Description', 'SID'])
 
     def shares(self):
-        self._print_query(
+        _print_query(self.__iWbemServices,
             'Network Shares',
             'SELECT Name, Path, Description, Type FROM Win32_Share',
             ['Name', 'Path', 'Description', 'Type'])
 
     def disks(self):
-        self._print_query(
+        _print_query(self.__iWbemServices,
             'Logical Disks',
             'SELECT DeviceID, VolumeName, FileSystem, Size, FreeSpace, '
             'DriveType FROM Win32_LogicalDisk',
@@ -404,7 +432,7 @@ class EnumOps:
              'DriveType'])
 
     def network(self):
-        self._print_query(
+        _print_query(self.__iWbemServices,
             'Network Adapters (IP Enabled)',
             'SELECT Description, IPAddress, IPSubnet, DefaultIPGateway, '
             'DNSServerSearchOrder, MACAddress, DHCPEnabled '
@@ -412,7 +440,470 @@ class EnumOps:
             ['Description', 'MACAddress', 'IPAddress', 'IPSubnet',
              'DefaultIPGateway', 'DNSServerSearchOrder', 'DHCPEnabled'])
 
+    def startup(self):
+        _print_query(self.__iWbemServices,
+            'Startup Commands',
+            'SELECT Name, Command, User, Location FROM Win32_StartupCommand',
+            ['Name', 'Command', 'User', 'Location'])
 
+    def hotfix(self):
+        _print_query(self.__iWbemServices,
+            'Installed Hotfixes',
+            'SELECT HotFixID, Description, InstalledOn, InstalledBy '
+            'FROM Win32_QuickFixEngineering',
+            ['HotFixID', 'Description', 'InstalledOn', 'InstalledBy'])
+
+    def sessions(self):
+        _print_query(self.__iWbemServices,
+            'Logon Sessions',
+            'SELECT LogonId, LogonType, StartTime, AuthenticationPackage, '
+            'Status FROM Win32_LogonSession',
+            ['LogonId', 'LogonType', 'StartTime', 'AuthenticationPackage',
+             'Status'])
+
+    def env(self):
+        _print_query(self.__iWbemServices,
+            'Environment Variables',
+            'SELECT Name, VariableValue, UserName, SystemVariable '
+            'FROM Win32_Environment',
+            ['Name', 'VariableValue', 'UserName', 'SystemVariable'])
+
+    def bios(self):
+        _print_query(self.__iWbemServices,
+            'BIOS Information',
+            'SELECT Manufacturer, Name, SerialNumber, SMBIOSBIOSVersion, '
+            'Version FROM Win32_BIOS',
+            ['Manufacturer', 'Name', 'SerialNumber', 'SMBIOSBIOSVersion',
+             'Version'])
+        _print_query(self.__iWbemServices,
+            'Computer System Product (VM Detection)',
+            'SELECT Name, Vendor, Version, UUID, IdentifyingNumber '
+            'FROM Win32_ComputerSystemProduct',
+            ['Name', 'Vendor', 'Version', 'UUID', 'IdentifyingNumber'])
+
+
+# ---------------------------------------------------------------------------
+# Windows Defender operations (MSFT_Mp*, root/Microsoft/Windows/Defender)
+# ---------------------------------------------------------------------------
+class DefenderOps:
+    def __init__(self, iWbemServices):
+        self.__iWbemServices = iWbemServices
+
+    def status(self):
+        _print_query(self.__iWbemServices,
+            'Windows Defender Status',
+            'SELECT AMRunningMode, AMServiceEnabled, AntispywareEnabled, '
+            'AntivirusEnabled, RealTimeProtectionEnabled, '
+            'AntivirusSignatureLastUpdated, QuickScanEndTime, '
+            'FullScanEndTime, ComputerState '
+            'FROM MSFT_MpComputerStatus',
+            ['AMRunningMode', 'AMServiceEnabled', 'AntispywareEnabled',
+             'AntivirusEnabled', 'RealTimeProtectionEnabled',
+             'AntivirusSignatureLastUpdated', 'QuickScanEndTime',
+             'FullScanEndTime', 'ComputerState'])
+
+    def exclusions(self):
+        print('[*] Defender Exclusions')
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT ExclusionPath, ExclusionProcess, '
+                                 'ExclusionExtension FROM MSFT_MpPreference'):
+            for field, label in [('ExclusionPath', 'Path'),
+                                 ('ExclusionProcess', 'Process'),
+                                 ('ExclusionExtension', 'Extension')]:
+                val = props.get(field, {}).get('value')
+                if val:
+                    items = val if isinstance(val, list) else [val]
+                    for item in items:
+                        print('  %-12s %s' % (label + ':', item))
+            return
+        print('  (no exclusions or access denied)')
+
+    def add_exclusion(self, exc_type, value):
+        pref, _ = self.__iWbemServices.GetObject('MSFT_MpPreference')
+        try:
+            if exc_type == 'path':
+                result = pref.Add(ExclusionPath=[value])
+            elif exc_type == 'process':
+                result = pref.Add(ExclusionProcess=[value])
+            elif exc_type == 'extension':
+                result = pref.Add(ExclusionExtension=[value])
+            else:
+                print('[-] Unknown exclusion type: %s' % exc_type)
+                return False
+
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Added %s exclusion: %s' % (exc_type, value))
+                return True
+            else:
+                print('[-] Add exclusion returned: %d' % ret)
+                return False
+        except Exception as e:
+            print('[-] Add exclusion failed: %s' % e)
+            return False
+
+    def remove_exclusion(self, exc_type, value):
+        pref, _ = self.__iWbemServices.GetObject('MSFT_MpPreference')
+        try:
+            if exc_type == 'path':
+                result = pref.Remove(ExclusionPath=[value])
+            elif exc_type == 'process':
+                result = pref.Remove(ExclusionProcess=[value])
+            elif exc_type == 'extension':
+                result = pref.Remove(ExclusionExtension=[value])
+            else:
+                print('[-] Unknown exclusion type: %s' % exc_type)
+                return False
+
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Removed %s exclusion: %s' % (exc_type, value))
+                return True
+            else:
+                print('[-] Remove exclusion returned: %d' % ret)
+                return False
+        except Exception as e:
+            print('[-] Remove exclusion failed: %s' % e)
+            return False
+
+
+# ---------------------------------------------------------------------------
+# AV/Security product detection (SecurityCenter2)
+# ---------------------------------------------------------------------------
+class AvOps:
+    def __init__(self, iWbemServices):
+        self.__iWbemServices = iWbemServices
+
+    @staticmethod
+    def _decode_product_state(state):
+        hex_state = '%06x' % state
+        scanner_on = hex_state[2:4] == '10'
+        defs_current = hex_state[4:6] == '00'
+        return ('Enabled' if scanner_on else 'Disabled',
+                'Up to date' if defs_current else 'Outdated')
+
+    def list(self):
+        for wmi_class, label in [('AntiVirusProduct', 'Antivirus'),
+                                 ('AntiSpywareProduct', 'Antispyware'),
+                                 ('FirewallProduct', 'Firewall')]:
+            print('[*] %s Products' % label)
+            count = 0
+            try:
+                for props in _iter_query(self.__iWbemServices,
+                                         'SELECT displayName, productState '
+                                         'FROM %s' % wmi_class):
+                    name = props.get('displayName', {}).get('value', '(unknown)')
+                    state = props.get('productState', {}).get('value', 0)
+                    scanner, defs = self._decode_product_state(state)
+                    print('  %-30s Scanner: %-10s Definitions: %s' % (
+                        name, scanner, defs))
+                    count += 1
+            except Exception as e:
+                print('  [-] Query failed: %s' % e)
+            if count == 0:
+                print('  (none found)')
+            print('')
+
+
+# ---------------------------------------------------------------------------
+# Event log operations (Win32_NTEventLogFile/Win32_NTLogEvent, root/cimv2)
+# ---------------------------------------------------------------------------
+class EventLogOps:
+    def __init__(self, iWbemServices):
+        self.__iWbemServices = iWbemServices
+
+    def list(self):
+        print('%-25s %-12s %-12s %s' % ('LogFile', 'Records', 'Size (KB)', 'MaxSize (KB)'))
+        print('%-25s %-12s %-12s %s' % ('-------', '-------', '---------', '------------'))
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT LogFileName, NumberOfRecords, FileSize, '
+                                 'MaxFileSize FROM Win32_NTEventLogFile'):
+            size_kb = (props['FileSize']['value'] or 0) // 1024
+            max_kb = (props['MaxFileSize']['value'] or 0) // 1024
+            print('%-25s %-12s %-12s %s' % (
+                props['LogFileName']['value'] or '',
+                props['NumberOfRecords']['value'] or 0,
+                size_kb,
+                max_kb))
+
+    def clear(self, logname):
+        path = "Win32_NTEventLogFile.LogFileName='%s'" % logname
+        try:
+            log_obj, _ = self.__iWbemServices.GetObject(path)
+            result = log_obj.ClearEventLog()
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Cleared event log: %s' % logname)
+            else:
+                print('[-] ClearEventLog returned: %d' % ret)
+        except Exception as e:
+            print('[-] Clear failed: %s' % e)
+
+    def read(self, logfile, event_id=None, count=50):
+        query = "SELECT EventCode, Type, TimeGenerated, SourceName, Message " \
+                "FROM Win32_NTLogEvent WHERE Logfile='%s'" % logfile
+        if event_id is not None:
+            query += ' AND EventCode=%d' % event_id
+
+        print('%-8s %-12s %-25s %-25s %s' % ('EventID', 'Type', 'TimeGenerated', 'Source', 'Message'))
+        print('%-8s %-12s %-25s %-25s %s' % ('-------', '----', '-------------', '------', '-------'))
+        n = 0
+        for props in _iter_query(self.__iWbemServices, query):
+            if n >= count:
+                print('[*] (showing first %d events, use -count for more)' % count)
+                break
+            msg = props.get('Message', {}).get('value', '') or ''
+            msg = msg.replace('\r\n', ' ').replace('\n', ' ')[:120]
+            print('%-8s %-12s %-25s %-25s %s' % (
+                props.get('EventCode', {}).get('value', ''),
+                props.get('Type', {}).get('value', ''),
+                props.get('TimeGenerated', {}).get('value', ''),
+                props.get('SourceName', {}).get('value', ''),
+                msg))
+            n += 1
+
+
+# ---------------------------------------------------------------------------
+# Network connections and DNS cache (StandardCimv2)
+# ---------------------------------------------------------------------------
+class NetOps:
+    def __init__(self, iWbemServices):
+        self.__iWbemServices = iWbemServices
+
+    def tcp(self):
+        TCP_STATES = {
+            1: 'Closed', 2: 'Listen', 3: 'SynSent', 4: 'SynReceived',
+            5: 'Established', 6: 'FinWait1', 7: 'FinWait2', 8: 'CloseWait',
+            9: 'Closing', 10: 'LastAck', 11: 'TimeWait', 12: 'DeleteTCB',
+        }
+        print('%-6s %-25s %-25s %-15s %s' % ('PID', 'Local', 'Remote', 'State', 'Name'))
+        print('%-6s %-25s %-25s %-15s %s' % ('---', '-----', '------', '-----', '----'))
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT LocalAddress, LocalPort, RemoteAddress, '
+                                 'RemotePort, State, OwningProcess '
+                                 'FROM MSFT_NetTCPConnection'):
+            local = '%s:%s' % (props['LocalAddress']['value'],
+                               props['LocalPort']['value'])
+            remote = '%s:%s' % (props['RemoteAddress']['value'],
+                                props['RemotePort']['value'])
+            state_num = props['State']['value']
+            state = TCP_STATES.get(state_num, str(state_num))
+            pid = props['OwningProcess']['value']
+            print('%-6s %-25s %-25s %-15s' % (pid, local, remote, state))
+
+    def udp(self):
+        print('%-6s %-25s' % ('PID', 'Local'))
+        print('%-6s %-25s' % ('---', '-----'))
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT LocalAddress, LocalPort, OwningProcess '
+                                 'FROM MSFT_NetUDPEndpoint'):
+            local = '%s:%s' % (props['LocalAddress']['value'],
+                               props['LocalPort']['value'])
+            pid = props['OwningProcess']['value']
+            print('%-6s %-25s' % (pid, local))
+
+    def dns(self):
+        print('%-50s %-8s %s' % ('Name', 'Type', 'Data'))
+        print('%-50s %-8s %s' % ('----', '----', '----'))
+        DNS_TYPES = {1: 'A', 2: 'NS', 5: 'CNAME', 6: 'SOA', 12: 'PTR',
+                     15: 'MX', 28: 'AAAA', 33: 'SRV', 255: 'ANY'}
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT Name, Type, Data FROM MSFT_DNSClientCache'):
+            name = props.get('Name', {}).get('value', '')
+            rtype_num = props.get('Type', {}).get('value', 0)
+            rtype = DNS_TYPES.get(rtype_num, str(rtype_num))
+            data = props.get('Data', {}).get('value', '')
+            print('%-50s %-8s %s' % (name, rtype, data))
+
+
+# ---------------------------------------------------------------------------
+# RDP operations (Win32_TerminalServiceSetting, root/cimv2/TerminalServices)
+# ---------------------------------------------------------------------------
+class RdpOps:
+    def __init__(self, iWbemServices):
+        self.__iWbemServices = iWbemServices
+
+    def status(self):
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT AllowTSConnections, SingleSession, '
+                                 'UserAuthenticationRequired '
+                                 'FROM Win32_TerminalServiceSetting'):
+            enabled = props['AllowTSConnections']['value']
+            nla = props.get('UserAuthenticationRequired', {}).get('value', None)
+            print('[*] RDP Status')
+            print('  AllowTSConnections:         %s (%s)' % (
+                enabled, 'Enabled' if enabled else 'Disabled'))
+            if nla is not None:
+                print('  UserAuthenticationRequired: %s (NLA %s)' % (
+                    nla, 'Required' if nla else 'Not required'))
+            return
+        print('[-] Could not query RDP status')
+
+    def enable(self):
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT * FROM Win32_TerminalServiceSetting'):
+            try:
+                ts_path = 'Win32_TerminalServiceSetting=@'
+                ts_obj, _ = self.__iWbemServices.GetObject(ts_path)
+                result = ts_obj.SetAllowTSConnections(1, 1)
+                ret = result.ReturnValue
+                if ret == 0:
+                    print('[+] RDP enabled (with firewall exception)')
+                else:
+                    print('[-] SetAllowTSConnections returned: %d' % ret)
+            except Exception as e:
+                print('[-] Enable RDP failed: %s' % e)
+            return
+        print('[-] Could not find TerminalServiceSetting')
+
+    def disable(self):
+        for props in _iter_query(self.__iWbemServices,
+                                 'SELECT * FROM Win32_TerminalServiceSetting'):
+            try:
+                ts_path = 'Win32_TerminalServiceSetting=@'
+                ts_obj, _ = self.__iWbemServices.GetObject(ts_path)
+                result = ts_obj.SetAllowTSConnections(0, 0)
+                ret = result.ReturnValue
+                if ret == 0:
+                    print('[+] RDP disabled')
+                else:
+                    print('[-] SetAllowTSConnections returned: %d' % ret)
+            except Exception as e:
+                print('[-] Disable RDP failed: %s' % e)
+            return
+        print('[-] Could not find TerminalServiceSetting')
+
+
+# ---------------------------------------------------------------------------
+# File operations (CIM_DataFile / Win32_Directory, root/cimv2)
+# ---------------------------------------------------------------------------
+class FileOps:
+    def __init__(self, iWbemServices):
+        self.__iWbemServices = iWbemServices
+
+    def search(self, drive, path, extension=None, name=None):
+        path = path.replace('\\', '\\\\')
+        query = "SELECT Name, FileSize, LastModified FROM CIM_DataFile " \
+                "WHERE Drive='%s' AND Path='%s'" % (drive, path)
+        if extension:
+            query += " AND Extension='%s'" % extension
+        if name:
+            query += " AND FileName LIKE '%s'" % name.replace('*', '%')
+
+        print('%-60s %-12s %s' % ('Name', 'Size', 'LastModified'))
+        print('%-60s %-12s %s' % ('----', '----', '------------'))
+        for props in _iter_query(self.__iWbemServices, query):
+            print('%-60s %-12s %s' % (
+                props['Name']['value'] or '',
+                props['FileSize']['value'] or 0,
+                props['LastModified']['value'] or ''))
+
+    def ls(self, path):
+        drive = path[:2]
+        dir_path = path[2:]
+        if not dir_path.endswith('\\'):
+            dir_path += '\\'
+        escaped = dir_path.replace('\\', '\\\\')
+
+        print('[*] Directory listing: %s' % path)
+        print('')
+
+        print('  [Directories]')
+        count = 0
+        for props in _iter_query(self.__iWbemServices,
+                                 "SELECT Name FROM Win32_Directory "
+                                 "WHERE Drive='%s' AND Path='%s'" % (drive, escaped)):
+            print('    %s' % props['Name']['value'])
+            count += 1
+        if count == 0:
+            print('    (none)')
+
+        print('')
+        print('  [Files]')
+        count = 0
+        for props in _iter_query(self.__iWbemServices,
+                                 "SELECT Name, FileSize FROM CIM_DataFile "
+                                 "WHERE Drive='%s' AND Path='%s'" % (drive, escaped)):
+            size = props['FileSize']['value'] or 0
+            print('    %-60s %s bytes' % (props['Name']['value'], size))
+            count += 1
+        if count == 0:
+            print('    (none)')
+        print('')
+
+    def copy(self, source, dest):
+        source_escaped = source.replace('\\', '\\\\')
+        path = "CIM_DataFile.Name='%s'" % source_escaped
+        try:
+            file_obj, _ = self.__iWbemServices.GetObject(path)
+            result = file_obj.Copy(dest)
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Copied %s -> %s' % (source, dest))
+            else:
+                print('[-] Copy returned: %d' % ret)
+        except Exception as e:
+            print('[-] Copy failed: %s' % e)
+
+    def delete(self, filepath):
+        filepath_escaped = filepath.replace('\\', '\\\\')
+        path = "CIM_DataFile.Name='%s'" % filepath_escaped
+        try:
+            file_obj, _ = self.__iWbemServices.GetObject(path)
+            result = file_obj.Delete()
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Deleted: %s' % filepath)
+            else:
+                print('[-] Delete returned: %d' % ret)
+        except Exception as e:
+            print('[-] Delete failed: %s' % e)
+
+
+# ---------------------------------------------------------------------------
+# Share operations (Win32_Share, root/cimv2)
+# ---------------------------------------------------------------------------
+class ShareOps:
+    def __init__(self, iWbemServices):
+        self.__iWbemServices = iWbemServices
+
+    def create(self, name, path, description=''):
+        share_class, _ = self.__iWbemServices.GetObject('Win32_Share')
+        try:
+            result = share_class.Create(path, name, 0, None, description, None, None)
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Share created: %s -> %s' % (name, path))
+            else:
+                SHARE_ERRORS = {
+                    2: 'Access denied', 8: 'Unknown failure',
+                    9: 'Invalid name', 10: 'Invalid level',
+                    21: 'Invalid parameter', 22: 'Duplicate share',
+                    23: 'Redirected path', 24: 'Unknown device/directory',
+                    25: 'Net name not found',
+                }
+                err = SHARE_ERRORS.get(ret, 'Unknown error')
+                print('[-] Create share returned: %d (%s)' % (ret, err))
+        except Exception as e:
+            print('[-] Create share failed: %s' % e)
+
+    def delete(self, name):
+        path = "Win32_Share.Name='%s'" % name
+        try:
+            share_obj, _ = self.__iWbemServices.GetObject(path)
+            result = share_obj.Delete()
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Share deleted: %s' % name)
+            else:
+                print('[-] Delete share returned: %d' % ret)
+        except Exception as e:
+            print('[-] Delete share failed: %s' % e)
+
+
+# ---------------------------------------------------------------------------
+# Main dispatcher
+# ---------------------------------------------------------------------------
 class WMIMultiTool:
     def __init__(self, username, password, domain, options):
         self.__username = username
@@ -428,24 +919,36 @@ class WMIMultiTool:
             self.__lmhash, self.__nthash = options.hashes.split(':')
 
     def run(self, remoteName, remoteHost):
-        if self.__options.action == 'reg':
-            namespace = '//./root/default'
-        else:
-            namespace = '//./root/cimv2'
+        namespace = NAMESPACE_MAP.get(self.__options.action, '//./root/cimv2')
 
         conn = WMIConnection(remoteHost, self.__username, self.__password,
                              self.__domain, self.__lmhash, self.__nthash,
                              self.__aesKey, self.__doKerberos, self.__kdcHost)
         dcom, iWbemServices = conn.connect(namespace)
         try:
-            if self.__options.action == 'reg':
+            action = self.__options.action
+            if action == 'reg':
                 self._dispatch_reg(iWbemServices)
-            elif self.__options.action == 'service':
+            elif action == 'service':
                 self._dispatch_service(iWbemServices)
-            elif self.__options.action == 'process':
+            elif action == 'process':
                 self._dispatch_process(iWbemServices)
-            elif self.__options.action == 'enum':
+            elif action == 'enum':
                 self._dispatch_enum(iWbemServices)
+            elif action == 'defender':
+                self._dispatch_defender(iWbemServices)
+            elif action == 'av':
+                self._dispatch_av(iWbemServices)
+            elif action == 'eventlog':
+                self._dispatch_eventlog(iWbemServices)
+            elif action == 'net':
+                self._dispatch_net(iWbemServices)
+            elif action == 'rdp':
+                self._dispatch_rdp(iWbemServices)
+            elif action == 'file':
+                self._dispatch_file(iWbemServices)
+            elif action == 'share':
+                self._dispatch_share(iWbemServices)
         finally:
             iWbemServices.RemRelease()
             dcom.disconnect()
@@ -505,28 +1008,131 @@ class WMIMultiTool:
             return
 
         ops = EnumOps(iWbemServices)
+        method = getattr(ops, opts.enum_action, None)
+        if method:
+            method()
+        else:
+            logging.error('Unknown enum action: %s' % opts.enum_action)
 
-        if opts.enum_action == 'sysinfo':
-            ops.sysinfo()
-        elif opts.enum_action == 'users':
-            ops.users()
-        elif opts.enum_action == 'groups':
-            ops.groups()
-        elif opts.enum_action == 'shares':
-            ops.shares()
-        elif opts.enum_action == 'disks':
-            ops.disks()
-        elif opts.enum_action == 'network':
-            ops.network()
+    def _dispatch_defender(self, iWbemServices):
+        opts = self.__options
+        if not opts.defender_action:
+            logging.error('No defender action specified. Use -h for help.')
+            return
+
+        ops = DefenderOps(iWbemServices)
+
+        if opts.defender_action == 'status':
+            ops.status()
+        elif opts.defender_action == 'exclusions':
+            ops.exclusions()
+        elif opts.defender_action == 'add-exclusion':
+            ops.add_exclusion(opts.exc_type, opts.value)
+        elif opts.defender_action == 'remove-exclusion':
+            ops.remove_exclusion(opts.exc_type, opts.value)
+
+    def _dispatch_av(self, iWbemServices):
+        opts = self.__options
+        if not opts.av_action:
+            logging.error('No av action specified. Use -h for help.')
+            return
+
+        ops = AvOps(iWbemServices)
+
+        if opts.av_action == 'list':
+            ops.list()
+
+    def _dispatch_eventlog(self, iWbemServices):
+        opts = self.__options
+        if not opts.eventlog_action:
+            logging.error('No eventlog action specified. Use -h for help.')
+            return
+
+        ops = EventLogOps(iWbemServices)
+
+        if opts.eventlog_action == 'list':
+            ops.list()
+        elif opts.eventlog_action == 'clear':
+            ops.clear(opts.name)
+        elif opts.eventlog_action == 'read':
+            ops.read(opts.logfile,
+                     getattr(opts, 'event_id', None),
+                     getattr(opts, 'count', 50))
+
+    def _dispatch_net(self, iWbemServices):
+        opts = self.__options
+        if not opts.net_action:
+            logging.error('No net action specified. Use -h for help.')
+            return
+
+        ops = NetOps(iWbemServices)
+
+        if opts.net_action == 'tcp':
+            ops.tcp()
+        elif opts.net_action == 'udp':
+            ops.udp()
+        elif opts.net_action == 'dns':
+            ops.dns()
+
+    def _dispatch_rdp(self, iWbemServices):
+        opts = self.__options
+        if not opts.rdp_action:
+            logging.error('No rdp action specified. Use -h for help.')
+            return
+
+        ops = RdpOps(iWbemServices)
+
+        if opts.rdp_action == 'status':
+            ops.status()
+        elif opts.rdp_action == 'enable':
+            ops.enable()
+        elif opts.rdp_action == 'disable':
+            ops.disable()
+
+    def _dispatch_file(self, iWbemServices):
+        opts = self.__options
+        if not opts.file_action:
+            logging.error('No file action specified. Use -h for help.')
+            return
+
+        ops = FileOps(iWbemServices)
+
+        if opts.file_action == 'search':
+            ops.search(opts.drive, opts.path,
+                       getattr(opts, 'ext', None),
+                       getattr(opts, 'fname', None))
+        elif opts.file_action == 'ls':
+            ops.ls(opts.path)
+        elif opts.file_action == 'copy':
+            ops.copy(opts.source, opts.dest)
+        elif opts.file_action == 'delete':
+            ops.delete(opts.path)
+
+    def _dispatch_share(self, iWbemServices):
+        opts = self.__options
+        if not opts.share_action:
+            logging.error('No share action specified. Use -h for help.')
+            return
+
+        ops = ShareOps(iWbemServices)
+
+        if opts.share_action == 'create':
+            ops.create(opts.name, opts.path,
+                       getattr(opts, 'description', ''))
+        elif opts.share_action == 'delete':
+            ops.delete(opts.name)
 
 
+# ---------------------------------------------------------------------------
+# Argparse and main
+# ---------------------------------------------------------------------------
 if __name__ == '__main__':
     print(version.BANNER)
 
     parser = argparse.ArgumentParser(
         add_help=True,
-        description='WMI multitool for registry, service, process, and enumeration '
-                    'operations via DCOM. No processes are spawned on the target.')
+        description='WMI multitool for remote Windows operations via DCOM. '
+                    'No processes are spawned on the target.')
 
     parser.add_argument('target', action='store',
                         help='[[domain/]username[:password]@]<targetName or address>')
@@ -540,103 +1146,181 @@ if __name__ == '__main__':
 
     subparsers = parser.add_subparsers(help='modules', dest='action')
 
-    # --- reg module ---
+    # ===================== reg =====================
     reg_parser = subparsers.add_parser('reg',
         help='Registry operations via WMI StdRegProv (no subprocess)')
-    reg_subparsers = reg_parser.add_subparsers(help='registry actions', dest='reg_action')
+    reg_sub = reg_parser.add_subparsers(help='registry actions', dest='reg_action')
 
-    reg_query = reg_subparsers.add_parser('query',
-        help='Query registry keys and values')
-    reg_query.add_argument('-keyName', action='store', required=True,
-        help='Registry key path (e.g. HKLM\\SOFTWARE\\Microsoft)')
-    reg_query.add_argument('-v', dest='valuename', action='store',
-        help='Value name to query. If omitted, enumerates all subkeys and values')
+    p = reg_sub.add_parser('query', help='Query registry keys and values')
+    p.add_argument('-keyName', required=True, help='Registry key path')
+    p.add_argument('-v', dest='valuename', help='Value name (omit to enumerate all)')
 
-    reg_add = reg_subparsers.add_parser('add',
-        help='Add or modify a registry value')
-    reg_add.add_argument('-keyName', action='store', required=True,
-        help='Registry key path')
-    reg_add.add_argument('-v', dest='valuename', action='store', required=True,
-        help='Value name to set')
-    reg_add.add_argument('-vt', dest='valuetype', action='store', required=True,
-        help='Value type (REG_SZ, REG_EXPAND_SZ, REG_DWORD, REG_QWORD, REG_MULTI_SZ, REG_BINARY)')
-    reg_add.add_argument('-vd', dest='valuedata', action='append', required=True,
+    p = reg_sub.add_parser('add', help='Add or modify a registry value')
+    p.add_argument('-keyName', required=True, help='Registry key path')
+    p.add_argument('-v', dest='valuename', required=True, help='Value name')
+    p.add_argument('-vt', dest='valuetype', required=True,
+        help='Type: REG_SZ, REG_EXPAND_SZ, REG_DWORD, REG_QWORD, REG_MULTI_SZ, REG_BINARY')
+    p.add_argument('-vd', dest='valuedata', action='append', required=True,
         help='Value data (repeat for REG_MULTI_SZ)')
 
-    reg_delete = reg_subparsers.add_parser('delete',
-        help='Delete a registry key or value')
-    reg_delete.add_argument('-keyName', action='store', required=True,
-        help='Registry key path')
-    reg_delete.add_argument('-v', dest='valuename', action='store',
-        help='Value name to delete. If omitted, deletes the key itself')
+    p = reg_sub.add_parser('delete', help='Delete a registry key or value')
+    p.add_argument('-keyName', required=True, help='Registry key path')
+    p.add_argument('-v', dest='valuename', help='Value name (omit to delete key)')
 
-    reg_createkey = reg_subparsers.add_parser('createkey',
-        help='Create a registry key')
-    reg_createkey.add_argument('-keyName', action='store', required=True,
-        help='Registry key path to create')
+    p = reg_sub.add_parser('createkey', help='Create a registry key')
+    p.add_argument('-keyName', required=True, help='Registry key path')
 
-    # --- service module ---
-    service_parser = subparsers.add_parser('service',
+    # ===================== service =====================
+    svc_parser = subparsers.add_parser('service',
         help='Service operations via WMI Win32_Service')
-    service_subparsers = service_parser.add_subparsers(help='service actions',
-                                                        dest='service_action')
+    svc_sub = svc_parser.add_subparsers(help='service actions', dest='service_action')
 
-    svc_list = service_subparsers.add_parser('list',
-        help='List all services')
-    svc_list.add_argument('-filter', dest='svc_filter', action='store',
-        help='Filter by service name (substring match)')
+    p = svc_sub.add_parser('list', help='List services')
+    p.add_argument('-filter', dest='svc_filter', help='Filter by name (substring)')
 
-    svc_start = service_subparsers.add_parser('start',
-        help='Start a service')
-    svc_start.add_argument('-name', action='store', required=True,
-        help='Service name')
+    p = svc_sub.add_parser('start', help='Start a service')
+    p.add_argument('-name', required=True, help='Service name')
 
-    svc_stop = service_subparsers.add_parser('stop',
-        help='Stop a service')
-    svc_stop.add_argument('-name', action='store', required=True,
-        help='Service name')
+    p = svc_sub.add_parser('stop', help='Stop a service')
+    p.add_argument('-name', required=True, help='Service name')
 
-    svc_status = service_subparsers.add_parser('status',
-        help='Show detailed service status')
-    svc_status.add_argument('-name', action='store', required=True,
-        help='Service name')
+    p = svc_sub.add_parser('status', help='Show detailed service status')
+    p.add_argument('-name', required=True, help='Service name')
 
-    # --- process module ---
-    process_parser = subparsers.add_parser('process',
+    # ===================== process =====================
+    proc_parser = subparsers.add_parser('process',
         help='Process operations via WMI Win32_Process')
-    process_subparsers = process_parser.add_subparsers(help='process actions',
-                                                        dest='process_action')
+    proc_sub = proc_parser.add_subparsers(help='process actions', dest='process_action')
 
-    proc_list = process_subparsers.add_parser('list',
-        help='List running processes')
-    proc_list.add_argument('-name', action='store',
-        help='Filter by process name')
+    p = proc_sub.add_parser('list', help='List running processes')
+    p.add_argument('-name', help='Filter by process name')
 
-    proc_kill = process_subparsers.add_parser('kill',
-        help='Terminate a process by PID')
-    proc_kill.add_argument('-pid', action='store', type=int, required=True,
-        help='Process ID to terminate')
+    p = proc_sub.add_parser('kill', help='Terminate a process by PID')
+    p.add_argument('-pid', type=int, required=True, help='Process ID')
 
-    # --- enum module ---
+    # ===================== enum =====================
     enum_parser = subparsers.add_parser('enum',
         help='System enumeration via WMI')
-    enum_subparsers = enum_parser.add_subparsers(help='enumeration targets',
-                                                  dest='enum_action')
+    enum_sub = enum_parser.add_subparsers(help='enumeration targets', dest='enum_action')
 
-    enum_subparsers.add_parser('sysinfo',
-        help='OS and computer system information')
-    enum_subparsers.add_parser('users',
-        help='Local user accounts')
-    enum_subparsers.add_parser('groups',
-        help='Local groups')
-    enum_subparsers.add_parser('shares',
-        help='Network shares')
-    enum_subparsers.add_parser('disks',
-        help='Logical disks')
-    enum_subparsers.add_parser('network',
-        help='Network adapter configurations')
+    enum_sub.add_parser('sysinfo', help='OS and computer system information')
+    enum_sub.add_parser('users', help='Local user accounts')
+    enum_sub.add_parser('groups', help='Local groups')
+    enum_sub.add_parser('shares', help='Network shares')
+    enum_sub.add_parser('disks', help='Logical disks')
+    enum_sub.add_parser('network', help='Network adapter configurations')
+    enum_sub.add_parser('startup', help='Startup commands / autoruns')
+    enum_sub.add_parser('hotfix', help='Installed hotfixes and patches')
+    enum_sub.add_parser('sessions', help='Logon sessions')
+    enum_sub.add_parser('env', help='Environment variables')
+    enum_sub.add_parser('bios', help='BIOS and hardware info (VM detection)')
 
-    # --- authentication ---
+    # ===================== defender =====================
+    def_parser = subparsers.add_parser('defender',
+        help='Windows Defender management (Win10+/Server2016+)')
+    def_sub = def_parser.add_subparsers(help='defender actions', dest='defender_action')
+
+    def_sub.add_parser('status', help='Defender status and RTP state')
+    def_sub.add_parser('exclusions', help='List current exclusions')
+
+    p = def_sub.add_parser('add-exclusion', help='Add a Defender exclusion')
+    p.add_argument('-type', dest='exc_type', required=True,
+        choices=['path', 'process', 'extension'],
+        help='Exclusion type')
+    p.add_argument('-value', required=True,
+        help='Exclusion value (path, process name, or extension)')
+
+    p = def_sub.add_parser('remove-exclusion', help='Remove a Defender exclusion')
+    p.add_argument('-type', dest='exc_type', required=True,
+        choices=['path', 'process', 'extension'],
+        help='Exclusion type')
+    p.add_argument('-value', required=True,
+        help='Exclusion value to remove')
+
+    # ===================== av =====================
+    av_parser = subparsers.add_parser('av',
+        help='Security product detection (workstation SKUs only)')
+    av_sub = av_parser.add_subparsers(help='av actions', dest='av_action')
+
+    av_sub.add_parser('list', help='List AV, antispyware, and firewall products')
+
+    # ===================== eventlog =====================
+    el_parser = subparsers.add_parser('eventlog',
+        help='Event log operations via Win32_NTEventLogFile')
+    el_sub = el_parser.add_subparsers(help='eventlog actions', dest='eventlog_action')
+
+    el_sub.add_parser('list', help='List event log files')
+
+    p = el_sub.add_parser('clear',
+        help='Clear an event log (writes Event ID 1102/104)')
+    p.add_argument('-name', required=True, help='Log name (e.g. Security, System)')
+
+    p = el_sub.add_parser('read', help='Read events (always filtered)')
+    p.add_argument('-logfile', required=True,
+        help='Log name (e.g. Security, Application)')
+    p.add_argument('-id', dest='event_id', type=int,
+        help='Filter by Event ID')
+    p.add_argument('-count', type=int, default=50,
+        help='Max events to display (default 50)')
+
+    # ===================== net =====================
+    net_parser = subparsers.add_parser('net',
+        help='Network connections and DNS cache (netstat equivalent)')
+    net_sub = net_parser.add_subparsers(help='net actions', dest='net_action')
+
+    net_sub.add_parser('tcp', help='TCP connections (MSFT_NetTCPConnection)')
+    net_sub.add_parser('udp', help='UDP endpoints (MSFT_NetUDPEndpoint)')
+    net_sub.add_parser('dns', help='DNS client cache (MSFT_DNSClientCache)')
+
+    # ===================== rdp =====================
+    rdp_parser = subparsers.add_parser('rdp',
+        help='Remote Desktop enable/disable/status')
+    rdp_sub = rdp_parser.add_subparsers(help='rdp actions', dest='rdp_action')
+
+    rdp_sub.add_parser('status', help='Show current RDP status')
+    rdp_sub.add_parser('enable', help='Enable RDP with firewall exception')
+    rdp_sub.add_parser('disable', help='Disable RDP')
+
+    # ===================== file =====================
+    file_parser = subparsers.add_parser('file',
+        help='File operations via CIM_DataFile (no subprocess)')
+    file_sub = file_parser.add_subparsers(help='file actions', dest='file_action')
+
+    p = file_sub.add_parser('search',
+        help='Search for files (REQUIRES -drive and -path to avoid hanging target)')
+    p.add_argument('-drive', required=True, help='Drive letter (e.g. C:)')
+    p.add_argument('-path', required=True,
+        help='Directory path with trailing backslash (e.g. \\\\Windows\\\\System32\\\\)')
+    p.add_argument('-ext', dest='ext', help='File extension filter (e.g. dll)')
+    p.add_argument('-name', dest='fname',
+        help='Filename filter with wildcards (e.g. ntds*)')
+
+    p = file_sub.add_parser('ls', help='List directory contents')
+    p.add_argument('-path', required=True,
+        help='Full directory path (e.g. C:\\\\Users)')
+
+    p = file_sub.add_parser('copy',
+        help='Copy a file (target-local only, cannot stream bytes)')
+    p.add_argument('-source', required=True, help='Source file path')
+    p.add_argument('-dest', required=True, help='Destination file path')
+
+    p = file_sub.add_parser('delete', help='Delete a file')
+    p.add_argument('-path', required=True, help='File path to delete')
+
+    # ===================== share =====================
+    share_parser = subparsers.add_parser('share',
+        help='Network share creation and deletion')
+    share_sub = share_parser.add_subparsers(help='share actions', dest='share_action')
+
+    p = share_sub.add_parser('create', help='Create a network share')
+    p.add_argument('-name', required=True, help='Share name')
+    p.add_argument('-path', required=True, help='Local path to share')
+    p.add_argument('-description', default='', help='Share description')
+
+    p = share_sub.add_parser('delete', help='Delete a network share')
+    p.add_argument('-name', required=True, help='Share name')
+
+    # ===================== authentication =====================
     group = parser.add_argument_group('authentication')
     group.add_argument('-hashes', action='store', metavar='LMHASH:NTHASH',
                        help='NTLM hashes, format is LMHASH:NTHASH')
@@ -644,22 +1328,18 @@ if __name__ == '__main__':
                        help='Don\'t ask for password (useful for -k)')
     group.add_argument('-k', action='store_true',
                        help='Use Kerberos authentication. Grabs credentials from ccache file '
-                            '(KRB5CCNAME) based on target parameters. If valid credentials '
-                            'cannot be found, it will use the ones specified in the command line')
+                            '(KRB5CCNAME) based on target parameters.')
     group.add_argument('-aesKey', action='store', metavar='hex key',
                        help='AES key to use for Kerberos Authentication (128 or 256 bits)')
     group.add_argument('-keytab', action='store',
                        help='Read keys for SPN from keytab file')
 
-    # --- connection ---
+    # ===================== connection =====================
     group = parser.add_argument_group('connection')
     group.add_argument('-dc-ip', action='store', metavar='ip address',
-                       help='IP Address of the domain controller. If omitted it will use the '
-                            'domain part (FQDN) specified in the target parameter')
+                       help='IP Address of the domain controller')
     group.add_argument('-target-ip', action='store', metavar='ip address',
-                       help='IP Address of the target machine. If omitted it will use whatever '
-                            'was specified as target. This is useful when target is the NetBIOS '
-                            'name and you cannot resolve it')
+                       help='IP Address of the target machine')
 
     if len(sys.argv) == 1:
         parser.print_help()
