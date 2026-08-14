@@ -349,19 +349,41 @@ class ProcessOps:
         self.__iWbemServices = iWbemServices
 
     def list(self, name_filter=None):
-        query = 'SELECT ProcessId, Name, SessionId, CommandLine FROM Win32_Process'
+        query = 'SELECT Handle, ProcessId, Name, SessionId, CommandLine FROM Win32_Process'
         if name_filter:
             query += " WHERE Name LIKE '%%%s%%'" % name_filter
 
-        print('%-8s %-30s %-10s %s' % ('PID', 'Name', 'SessionId', 'CommandLine'))
-        print('%-8s %-30s %-10s %s' % ('---', '----', '---------', '-----------'))
-        for props in _iter_query(self.__iWbemServices, query):
-            print('%-8s %-30s %-10s %s' % (
-                props['ProcessId']['value'],
-                props['Name']['value'] or '',
-                props['SessionId']['value'],
-                props['CommandLine']['value'] or '',
-            ))
+        print('%-8s %-25s %-22s %-10s %s' % ('PID', 'Name', 'Owner', 'SessionId', 'CommandLine'))
+        print('%-8s %-25s %-22s %-10s %s' % ('---', '----', '-----', '---------', '-----------'))
+        iEnum = self.__iWbemServices.ExecQuery(query)
+        try:
+            while True:
+                try:
+                    item = iEnum.Next(0xffffffff, 1)[0]
+                    props = item.getProperties()
+                    pid = props['ProcessId']['value']
+                    owner = ''
+                    try:
+                        result = item.GetOwner()
+                        user = getattr(result, 'User', None)
+                        domain = getattr(result, 'Domain', None)
+                        if user:
+                            owner = '%s\\%s' % (domain, user) if domain else user
+                    except Exception:
+                        pass
+                    print('%-8s %-25s %-22s %-10s %s' % (
+                        pid,
+                        props['Name']['value'] or '',
+                        owner,
+                        props['SessionId']['value'],
+                        props['CommandLine']['value'] or '',
+                    ))
+                except Exception as e:
+                    if str(e).find('S_FALSE') < 0:
+                        raise
+                    break
+        finally:
+            iEnum.RemRelease()
 
     def kill(self, pid):
         query = 'SELECT * FROM Win32_Process WHERE ProcessId=%d' % pid
