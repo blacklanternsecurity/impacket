@@ -616,18 +616,18 @@ class EventLogOps:
         print('%-25s %-12s %-12s %s' % ('LogFile', 'Records', 'Size (KB)', 'MaxSize (KB)'))
         print('%-25s %-12s %-12s %s' % ('-------', '-------', '---------', '------------'))
         for props in _iter_query(self.__iWbemServices,
-                                 'SELECT LogFileName, NumberOfRecords, FileSize, '
+                                 'SELECT LogfileName, NumberOfRecords, FileSize, '
                                  'MaxFileSize FROM Win32_NTEventLogFile'):
             size_kb = (props['FileSize']['value'] or 0) // 1024
             max_kb = (props['MaxFileSize']['value'] or 0) // 1024
             print('%-25s %-12s %-12s %s' % (
-                props['LogFileName']['value'] or '',
+                props['LogfileName']['value'] or '',
                 props['NumberOfRecords']['value'] or 0,
                 size_kb,
                 max_kb))
 
     def clear(self, logname):
-        path = "Win32_NTEventLogFile.LogFileName='%s'" % logname
+        path = "Win32_NTEventLogFile.LogfileName='%s'" % logname
         try:
             log_obj, _ = self.__iWbemServices.GetObject(path)
             result = log_obj.ClearEventLog()
@@ -739,39 +739,48 @@ class RdpOps:
             return
         print('[-] Could not query RDP status')
 
+    def _get_ts_object(self):
+        iEnum = self.__iWbemServices.ExecQuery(
+            'SELECT * FROM Win32_TerminalServiceSetting')
+        try:
+            item = iEnum.Next(0xffffffff, 1)[0]
+            return item
+        except Exception as e:
+            if str(e).find('S_FALSE') < 0:
+                raise
+        finally:
+            iEnum.RemRelease()
+        return None
+
     def enable(self):
-        for props in _iter_query(self.__iWbemServices,
-                                 'SELECT * FROM Win32_TerminalServiceSetting'):
-            try:
-                ts_path = 'Win32_TerminalServiceSetting=@'
-                ts_obj, _ = self.__iWbemServices.GetObject(ts_path)
-                result = ts_obj.SetAllowTSConnections(1, 1)
-                ret = result.ReturnValue
-                if ret == 0:
-                    print('[+] RDP enabled (with firewall exception)')
-                else:
-                    print('[-] SetAllowTSConnections returned: %d' % ret)
-            except Exception as e:
-                print('[-] Enable RDP failed: %s' % e)
+        ts = self._get_ts_object()
+        if ts is None:
+            print('[-] Could not find TerminalServiceSetting')
             return
-        print('[-] Could not find TerminalServiceSetting')
+        try:
+            result = ts.SetAllowTSConnections(1, 1)
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] RDP enabled (with firewall exception)')
+            else:
+                print('[-] SetAllowTSConnections returned: %d' % ret)
+        except Exception as e:
+            print('[-] Enable RDP failed: %s' % e)
 
     def disable(self):
-        for props in _iter_query(self.__iWbemServices,
-                                 'SELECT * FROM Win32_TerminalServiceSetting'):
-            try:
-                ts_path = 'Win32_TerminalServiceSetting=@'
-                ts_obj, _ = self.__iWbemServices.GetObject(ts_path)
-                result = ts_obj.SetAllowTSConnections(0, 0)
-                ret = result.ReturnValue
-                if ret == 0:
-                    print('[+] RDP disabled')
-                else:
-                    print('[-] SetAllowTSConnections returned: %d' % ret)
-            except Exception as e:
-                print('[-] Disable RDP failed: %s' % e)
+        ts = self._get_ts_object()
+        if ts is None:
+            print('[-] Could not find TerminalServiceSetting')
             return
-        print('[-] Could not find TerminalServiceSetting')
+        try:
+            result = ts.SetAllowTSConnections(0, 0)
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] RDP disabled')
+            else:
+                print('[-] SetAllowTSConnections returned: %d' % ret)
+        except Exception as e:
+            print('[-] Disable RDP failed: %s' % e)
 
 
 # ---------------------------------------------------------------------------
