@@ -46,8 +46,11 @@ from impacket import version
 from impacket.dcerpc.v5.dcom import wmi
 from impacket.dcerpc.v5.dcom.wmi import WBEMSTATUS
 from impacket.dcerpc.v5.dcomrt import DCOMConnection, COMVERSION
-from impacket.dcerpc.v5.dtypes import NULL
+from impacket.dcerpc.v5.dtypes import NULL, OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION
+from impacket.dcerpc.v5 import transport, rrp
+from impacket.smbconnection import SMBConnection
 from impacket.krb5.keytab import Keytab
+import struct
 
 HIVE_MAP = {
     'HKLM': 0x80000002, 'HKEY_LOCAL_MACHINE': 0x80000002,
@@ -276,6 +279,74 @@ class RegOps:
         except Exception as e:
             print('[-] CreateKey failed: %s' % e)
             return False
+
+    @staticmethod
+    def takeown(address, username, password, domain, lmhash, nthash,
+                aesKey, doKerberos, kdcHost, keypath):
+        admin_sid = b'\x01\x02\x00\x00\x00\x00\x00\x05\x20\x00\x00\x00\x20\x02\x00\x00'
+        everyone_sid = b'\x01\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00'
+        system_sid = b'\x01\x01\x00\x00\x00\x00\x00\x05\x12\x00\x00\x00'
+
+        smb = SMBConnection(address, address)
+        if doKerberos:
+            smb.kerberosLogin(username, password, domain, lmhash, nthash,
+                              aesKey, kdcHost=kdcHost)
+        else:
+            smb.login(username, password, domain, lmhash, nthash)
+
+        rpctransport = transport.SMBTransport(address, filename=r'\winreg',
+                                              smb_connection=smb)
+        dce = rpctransport.get_dce_rpc()
+        dce.connect()
+        dce.bind(rrp.MSRPC_UUID_RRP)
+
+        ans = rrp.hOpenLocalMachine(dce)
+        hklm = ans['phKey']
+
+        try:
+            print('[*] Opening key with WRITE_OWNER: %s' % keypath)
+            ans = rrp.hBaseRegOpenKey(dce, hklm, keypath, samDesired=0x80000)
+            hKey = ans['phkResult']
+
+            print('[*] Taking ownership (setting owner to Administrators)...')
+            owner_sd = struct.pack('<BBHIIII', 1, 0, 0x8000, 20, 0, 0, 0) + admin_sid
+            request = rrp.BaseRegSetKeySecurity()
+            request['hKey'] = hKey
+            request['SecurityInformation'] = OWNER_SECURITY_INFORMATION
+            request['pRpcSecurityDescriptor']['lpSecurityDescriptor'] = list(owner_sd)
+            request['pRpcSecurityDescriptor']['cbInSecurityDescriptor'] = len(owner_sd)
+            request['pRpcSecurityDescriptor']['cbOutSecurityDescriptor'] = len(owner_sd)
+            dce.request(request)
+            print('[+] Ownership taken')
+
+            rrp.hBaseRegCloseKey(dce, hKey)
+            print('[*] Reopening with WRITE_DAC...')
+            ans = rrp.hBaseRegOpenKey(dce, hklm, keypath, samDesired=0x40000)
+            hKey = ans['phkResult']
+
+            print('[*] Setting DACL (Administrators + SYSTEM: full, Everyone: read)...')
+            def _ace(mask, sid):
+                body = struct.pack('<I', mask) + sid
+                return struct.pack('<BBH', 0, 0x02, 4 + len(body)) + body
+
+            aces = _ace(0xF003F, admin_sid) + _ace(0xF003F, system_sid) + _ace(0x20019, everyone_sid)
+            acl = struct.pack('<BBHHH', 2, 0, 8 + len(aces), 3, 0) + aces
+            dacl_sd = struct.pack('<BBHIIII', 1, 0, 0x8004, 0, 0, 0, 20) + acl
+
+            request = rrp.BaseRegSetKeySecurity()
+            request['hKey'] = hKey
+            request['SecurityInformation'] = DACL_SECURITY_INFORMATION
+            request['pRpcSecurityDescriptor']['lpSecurityDescriptor'] = list(dacl_sd)
+            request['pRpcSecurityDescriptor']['cbInSecurityDescriptor'] = len(dacl_sd)
+            request['pRpcSecurityDescriptor']['cbOutSecurityDescriptor'] = len(dacl_sd)
+            dce.request(request)
+            print('[+] DACL set — key is now writable')
+
+            rrp.hBaseRegCloseKey(dce, hKey)
+        finally:
+            rrp.hBaseRegCloseKey(dce, hklm)
+            dce.disconnect()
+            smb.close()
 
 
 # ---------------------------------------------------------------------------
@@ -990,6 +1061,14 @@ class WMIMultiTool:
             logging.error('No registry action specified. Use -h for help.')
             return
 
+        if opts.reg_action == 'takeown':
+            _, subkey = RegOps.parse_keyname(opts.keyName)
+            RegOps.takeown(self.__options.target_ip, self.__username,
+                           self.__password, self.__domain, self.__lmhash,
+                           self.__nthash, self.__aesKey, self.__doKerberos,
+                           self.__kdcHost, subkey)
+            return
+
         ops = RegOps(iWbemServices)
         hive, subkey = RegOps.parse_keyname(opts.keyName)
 
@@ -1200,6 +1279,11 @@ if __name__ == '__main__':
 
     p = reg_sub.add_parser('createkey', help='Create a registry key')
     p.add_argument('-keyName', required=True, help='Registry key path')
+
+    p = reg_sub.add_parser('takeown',
+        help='Take ownership of a registry key via Remote Registry (requires RemoteRegistry service)')
+    p.add_argument('-keyName', required=True,
+        help='Registry key path (e.g. HKLM\\SOFTWARE\\Classes\\CLSID\\{...})')
 
     # ===================== service =====================
     svc_parser = subparsers.add_parser('service',
