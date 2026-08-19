@@ -46,8 +46,11 @@ from impacket import version
 from impacket.dcerpc.v5.dcom import wmi
 from impacket.dcerpc.v5.dcom.wmi import WBEMSTATUS
 from impacket.dcerpc.v5.dcomrt import DCOMConnection, COMVERSION
-from impacket.dcerpc.v5.dtypes import NULL
+from impacket.dcerpc.v5.dtypes import NULL, OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION
+from impacket.dcerpc.v5 import transport, rrp
+from impacket.smbconnection import SMBConnection
 from impacket.krb5.keytab import Keytab
+import struct
 
 HIVE_MAP = {
     'HKLM': 0x80000002, 'HKEY_LOCAL_MACHINE': 0x80000002,
@@ -276,6 +279,74 @@ class RegOps:
         except Exception as e:
             print('[-] CreateKey failed: %s' % e)
             return False
+
+    @staticmethod
+    def takeown(address, username, password, domain, lmhash, nthash,
+                aesKey, doKerberos, kdcHost, keypath):
+        admin_sid = b'\x01\x02\x00\x00\x00\x00\x00\x05\x20\x00\x00\x00\x20\x02\x00\x00'
+        everyone_sid = b'\x01\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00'
+        system_sid = b'\x01\x01\x00\x00\x00\x00\x00\x05\x12\x00\x00\x00'
+
+        smb = SMBConnection(address, address)
+        if doKerberos:
+            smb.kerberosLogin(username, password, domain, lmhash, nthash,
+                              aesKey, kdcHost=kdcHost)
+        else:
+            smb.login(username, password, domain, lmhash, nthash)
+
+        rpctransport = transport.SMBTransport(address, filename=r'\winreg',
+                                              smb_connection=smb)
+        dce = rpctransport.get_dce_rpc()
+        dce.connect()
+        dce.bind(rrp.MSRPC_UUID_RRP)
+
+        ans = rrp.hOpenLocalMachine(dce)
+        hklm = ans['phKey']
+
+        try:
+            print('[*] Opening key with WRITE_OWNER: %s' % keypath)
+            ans = rrp.hBaseRegOpenKey(dce, hklm, keypath, samDesired=0x80000)
+            hKey = ans['phkResult']
+
+            print('[*] Taking ownership (setting owner to Administrators)...')
+            owner_sd = struct.pack('<BBHIIII', 1, 0, 0x8000, 20, 0, 0, 0) + admin_sid
+            request = rrp.BaseRegSetKeySecurity()
+            request['hKey'] = hKey
+            request['SecurityInformation'] = OWNER_SECURITY_INFORMATION
+            request['pRpcSecurityDescriptor']['lpSecurityDescriptor'] = list(owner_sd)
+            request['pRpcSecurityDescriptor']['cbInSecurityDescriptor'] = len(owner_sd)
+            request['pRpcSecurityDescriptor']['cbOutSecurityDescriptor'] = len(owner_sd)
+            dce.request(request)
+            print('[+] Ownership taken')
+
+            rrp.hBaseRegCloseKey(dce, hKey)
+            print('[*] Reopening with WRITE_DAC...')
+            ans = rrp.hBaseRegOpenKey(dce, hklm, keypath, samDesired=0x40000)
+            hKey = ans['phkResult']
+
+            print('[*] Setting DACL (Administrators + SYSTEM: full, Everyone: read)...')
+            def _ace(mask, sid):
+                body = struct.pack('<I', mask) + sid
+                return struct.pack('<BBH', 0, 0x02, 4 + len(body)) + body
+
+            aces = _ace(0xF003F, admin_sid) + _ace(0xF003F, system_sid) + _ace(0x20019, everyone_sid)
+            acl = struct.pack('<BBHHH', 2, 0, 8 + len(aces), 3, 0) + aces
+            dacl_sd = struct.pack('<BBHIIII', 1, 0, 0x8004, 0, 0, 0, 20) + acl
+
+            request = rrp.BaseRegSetKeySecurity()
+            request['hKey'] = hKey
+            request['SecurityInformation'] = DACL_SECURITY_INFORMATION
+            request['pRpcSecurityDescriptor']['lpSecurityDescriptor'] = list(dacl_sd)
+            request['pRpcSecurityDescriptor']['cbInSecurityDescriptor'] = len(dacl_sd)
+            request['pRpcSecurityDescriptor']['cbOutSecurityDescriptor'] = len(dacl_sd)
+            dce.request(request)
+            print('[+] DACL set — key is now writable')
+
+            rrp.hBaseRegCloseKey(dce, hKey)
+        finally:
+            rrp.hBaseRegCloseKey(dce, hklm)
+            dce.disconnect()
+            smb.close()
 
 
 # ---------------------------------------------------------------------------
@@ -890,6 +961,75 @@ class FileOps:
         except Exception as e:
             print('[-] Delete failed: %s' % e)
 
+    def takeown(self, filepath):
+        filepath_escaped = filepath.replace('\\', '\\\\')
+        path = "CIM_DataFile.Name='%s'" % filepath_escaped
+        try:
+            file_obj, _ = self.__iWbemServices.GetObject(path)
+            result = file_obj.TakeOwnerShip()
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Took ownership: %s' % filepath)
+            else:
+                print('[-] TakeOwnerShip returned: %d' % ret)
+                if ret == 2:
+                    print('    (2 = Access Denied — caller may lack SeTakeOwnershipPrivilege)')
+                elif ret == 21:
+                    print('    (21 = Invalid parameter)')
+            return ret == 0
+        except Exception as e:
+            print('[-] TakeOwnerShip failed: %s' % e)
+            return False
+
+    def chmod(self, filepath):
+        filepath_escaped = filepath.replace('\\', '\\\\')
+        path = "Win32_LogicalFileSecuritySetting.Path='%s'" % filepath_escaped
+        try:
+            sec_obj, _ = self.__iWbemServices.GetObject(path)
+            result = sec_obj.GetSecurityDescriptor()
+            ret = result.ReturnValue
+            if ret != 0:
+                print('[-] GetSecurityDescriptor returned: %d' % ret)
+                return False
+
+            sd = result.Descriptor
+
+            trustee_cls, _ = self.__iWbemServices.GetObject('Win32_Trustee')
+            admin_trustee = trustee_cls.SpawnInstance()
+            admin_trustee.Name = 'Administrators'
+            admin_trustee.SIDString = 'S-1-5-32-544'
+
+            system_trustee = trustee_cls.SpawnInstance()
+            system_trustee.Name = 'SYSTEM'
+            system_trustee.SIDString = 'S-1-5-18'
+
+            ace_cls, _ = self.__iWbemServices.GetObject('Win32_ACE')
+            admin_ace = ace_cls.SpawnInstance()
+            admin_ace.AccessMask = 0x1F01FF  # FILE_ALL_ACCESS
+            admin_ace.AceFlags = 0
+            admin_ace.AceType = 0  # ACCESS_ALLOWED
+            admin_ace.Trustee = admin_trustee
+
+            system_ace = ace_cls.SpawnInstance()
+            system_ace.AccessMask = 0x1F01FF
+            system_ace.AceFlags = 0
+            system_ace.AceType = 0
+            system_ace.Trustee = system_trustee
+
+            sd.DACL = [admin_ace, system_ace]
+            sd.ControlFlags = int(sd.ControlFlags) | 0x0004  # SE_DACL_PRESENT
+
+            result = sec_obj.SetSecurityDescriptor(sd)
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] DACL set (Administrators + SYSTEM: Full Control): %s' % filepath)
+            else:
+                print('[-] SetSecurityDescriptor returned: %d' % ret)
+            return ret == 0
+        except Exception as e:
+            print('[-] chmod failed: %s' % e)
+            return False
+
 
 # ---------------------------------------------------------------------------
 # Share operations (Win32_Share, root/cimv2)
@@ -988,6 +1128,14 @@ class WMIMultiTool:
         opts = self.__options
         if not opts.reg_action:
             logging.error('No registry action specified. Use -h for help.')
+            return
+
+        if opts.reg_action == 'takeown':
+            _, subkey = RegOps.parse_keyname(opts.keyName)
+            RegOps.takeown(self.__options.target_ip, self.__username,
+                           self.__password, self.__domain, self.__lmhash,
+                           self.__nthash, self.__aesKey, self.__doKerberos,
+                           self.__kdcHost, subkey)
             return
 
         ops = RegOps(iWbemServices)
@@ -1138,6 +1286,9 @@ class WMIMultiTool:
             ops.copy(opts.source, opts.dest)
         elif opts.file_action == 'delete':
             ops.delete(opts.path)
+        elif opts.file_action == 'takeown':
+            if ops.takeown(opts.path):
+                ops.chmod(opts.path)
 
     def _dispatch_share(self, iWbemServices):
         opts = self.__options
@@ -1200,6 +1351,11 @@ if __name__ == '__main__':
 
     p = reg_sub.add_parser('createkey', help='Create a registry key')
     p.add_argument('-keyName', required=True, help='Registry key path')
+
+    p = reg_sub.add_parser('takeown',
+        help='Take ownership of a registry key via Remote Registry (requires RemoteRegistry service)')
+    p.add_argument('-keyName', required=True,
+        help='Registry key path (e.g. HKLM\\SOFTWARE\\Classes\\CLSID\\{...})')
 
     # ===================== service =====================
     svc_parser = subparsers.add_parser('service',
@@ -1337,6 +1493,11 @@ if __name__ == '__main__':
 
     p = file_sub.add_parser('delete', help='Delete a file')
     p.add_argument('-path', required=True, help='File path to delete')
+
+    p = file_sub.add_parser('takeown',
+        help='Take ownership + set Administrators Full Control DACL (pure WMI, no subprocess)')
+    p.add_argument('-path', required=True,
+        help='File path (e.g. C:\\Windows\\System32\\appmgmts.dll)')
 
     # ===================== share =====================
     share_parser = subparsers.add_parser('share',
