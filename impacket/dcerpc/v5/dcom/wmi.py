@@ -172,6 +172,7 @@ class ENCODED_STRING(Structure):
                 self.fromString(data)
         else:
             self.structure = self.tascii
+            self.isUnicode = False
             self.data = None
 
     def __getitem__(self, key):
@@ -2471,7 +2472,6 @@ class IWbemClassObject(IRemUnknown):
                 propRecord = properties[propName]
                 itemValue = getattr(self, propName)
                 propIsInherited = propRecord['inherited']
-                print("PropName %r, Value: %r" % (propName,itemValue))
 
                 pType = propRecord['type'] & (~(CIM_ARRAY_FLAG|Inherited))
                 if propRecord['type'] & CIM_ARRAY_FLAG:
@@ -2484,6 +2484,24 @@ class IWbemClassObject(IRemUnknown):
                     if itemValue is None:
                         ndTable |= self.__ndEntry(i, True, propIsInherited)
                         valueTable += pack(packStr, 0)
+                    elif pType == CIM_TYPE_ENUM.CIM_TYPE_OBJECT.value:
+                        arraySize = pack(HEAPREF[:-2], len(itemValue))
+                        arrayItems = []
+                        for j in range(len(itemValue)):
+                            marshaledObject = itemValue[j].marshalMe()
+                            curObject = pack('<L', marshaledObject['pObjectData']['ObjectEncodingLength'])
+                            curObject += marshaledObject['pObjectData']['ObjectBlock'].getData()
+                            arrayItems.append(curObject)
+                        curStrHeapPtr = curHeapPtr + 4
+                        arrayHeapPtrValues = b''
+                        arrayValueTable = b''
+                        for j in range(len(arrayItems)):
+                            arrayHeapPtrValues += pack('<L', curStrHeapPtr + 4 * (len(arrayItems) - j) + len(arrayValueTable))
+                            arrayValueTable += arrayItems[j]
+                            curStrHeapPtr += 4
+                        valueTable += pack('<L', curHeapPtr)
+                        instanceHeap += arraySize + arrayHeapPtrValues + arrayValueTable
+                        curHeapPtr = len(instanceHeap)
                     else:
                         valueTable += pack('<L', curHeapPtr)
                         arraySize = pack(HEAPREF[:-2], len(itemValue))
@@ -2514,15 +2532,17 @@ class IWbemClassObject(IRemUnknown):
                     else:
                         valueTable += pack(packStr, itemValue)
                 elif pType == CIM_TYPE_ENUM.CIM_TYPE_OBJECT.value:
-                    # For now we just pack None and set the inherited_default
-                    # flag, just in case a parent class defines this for us
-                    valueTable += NULL.getData()
                     if itemValue is None:
                         ndTable |= self.__ndEntry(i, True, True)
+                        valueTable += NULL.getData()
+                    else:
+                        valueTable += pack('<L', curHeapPtr)
+                        marshaledObject = itemValue.marshalMe()
+                        instanceHeap += pack('<L', marshaledObject['pObjectData']['ObjectEncodingLength'])
+                        instanceHeap += marshaledObject['pObjectData']['ObjectBlock'].getData()
+                        curHeapPtr = len(instanceHeap)
                 else:
-                    if itemValue == '':
-                        # https://github.com/fortra/impacket/pull/1069#issuecomment-835179409
-                        # Force inherited_default to avoid 'obscure' issue in wmipersist.py
+                    if itemValue is None or itemValue == '':
                         ndTable |= self.__ndEntry(i, True, True)
                         valueTable += NULL.getData()
                     else:

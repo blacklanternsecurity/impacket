@@ -961,6 +961,75 @@ class FileOps:
         except Exception as e:
             print('[-] Delete failed: %s' % e)
 
+    def takeown(self, filepath):
+        filepath_escaped = filepath.replace('\\', '\\\\')
+        path = "CIM_DataFile.Name='%s'" % filepath_escaped
+        try:
+            file_obj, _ = self.__iWbemServices.GetObject(path)
+            result = file_obj.TakeOwnerShip()
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] Took ownership: %s' % filepath)
+            else:
+                print('[-] TakeOwnerShip returned: %d' % ret)
+                if ret == 2:
+                    print('    (2 = Access Denied — caller may lack SeTakeOwnershipPrivilege)')
+                elif ret == 21:
+                    print('    (21 = Invalid parameter)')
+            return ret == 0
+        except Exception as e:
+            print('[-] TakeOwnerShip failed: %s' % e)
+            return False
+
+    def chmod(self, filepath):
+        filepath_escaped = filepath.replace('\\', '\\\\')
+        path = "Win32_LogicalFileSecuritySetting.Path='%s'" % filepath_escaped
+        try:
+            sec_obj, _ = self.__iWbemServices.GetObject(path)
+            result = sec_obj.GetSecurityDescriptor()
+            ret = result.ReturnValue
+            if ret != 0:
+                print('[-] GetSecurityDescriptor returned: %d' % ret)
+                return False
+
+            sd = result.Descriptor
+
+            trustee_cls, _ = self.__iWbemServices.GetObject('Win32_Trustee')
+            admin_trustee = trustee_cls.SpawnInstance()
+            admin_trustee.Name = 'Administrators'
+            admin_trustee.SIDString = 'S-1-5-32-544'
+
+            system_trustee = trustee_cls.SpawnInstance()
+            system_trustee.Name = 'SYSTEM'
+            system_trustee.SIDString = 'S-1-5-18'
+
+            ace_cls, _ = self.__iWbemServices.GetObject('Win32_ACE')
+            admin_ace = ace_cls.SpawnInstance()
+            admin_ace.AccessMask = 0x1F01FF  # FILE_ALL_ACCESS
+            admin_ace.AceFlags = 0
+            admin_ace.AceType = 0  # ACCESS_ALLOWED
+            admin_ace.Trustee = admin_trustee
+
+            system_ace = ace_cls.SpawnInstance()
+            system_ace.AccessMask = 0x1F01FF
+            system_ace.AceFlags = 0
+            system_ace.AceType = 0
+            system_ace.Trustee = system_trustee
+
+            sd.DACL = [admin_ace, system_ace]
+            sd.ControlFlags = int(sd.ControlFlags) | 0x0004  # SE_DACL_PRESENT
+
+            result = sec_obj.SetSecurityDescriptor(sd)
+            ret = result.ReturnValue
+            if ret == 0:
+                print('[+] DACL set (Administrators + SYSTEM: Full Control): %s' % filepath)
+            else:
+                print('[-] SetSecurityDescriptor returned: %d' % ret)
+            return ret == 0
+        except Exception as e:
+            print('[-] chmod failed: %s' % e)
+            return False
+
 
 # ---------------------------------------------------------------------------
 # Share operations (Win32_Share, root/cimv2)
@@ -1217,6 +1286,9 @@ class WMIMultiTool:
             ops.copy(opts.source, opts.dest)
         elif opts.file_action == 'delete':
             ops.delete(opts.path)
+        elif opts.file_action == 'takeown':
+            if ops.takeown(opts.path):
+                ops.chmod(opts.path)
 
     def _dispatch_share(self, iWbemServices):
         opts = self.__options
@@ -1421,6 +1493,11 @@ if __name__ == '__main__':
 
     p = file_sub.add_parser('delete', help='Delete a file')
     p.add_argument('-path', required=True, help='File path to delete')
+
+    p = file_sub.add_parser('takeown',
+        help='Take ownership + set Administrators Full Control DACL (pure WMI, no subprocess)')
+    p.add_argument('-path', required=True,
+        help='File path (e.g. C:\\Windows\\System32\\appmgmts.dll)')
 
     # ===================== share =====================
     share_parser = subparsers.add_parser('share',
