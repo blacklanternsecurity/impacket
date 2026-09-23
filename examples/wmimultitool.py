@@ -18,7 +18,7 @@
 #     service   - Service management via Win32_Service
 #     process   - Process listing/termination via Win32_Process
 #     enum      - System enumeration (sysinfo, users, groups, shares,
-#                 disks, network, startup, hotfix, sessions, env, bios)
+#                 disks, network, startup, hotfix, sessions, loggedon, env, bios)
 #     defender  - Windows Defender management (exclusions, status)
 #     av        - Security product detection (AV, firewall)
 #     eventlog  - Event log listing, reading, and clearing
@@ -37,6 +37,7 @@
 from __future__ import division
 from __future__ import print_function
 import sys
+import re
 import argparse
 import logging
 
@@ -553,6 +554,58 @@ class EnumOps:
             'Status FROM Win32_LogonSession',
             ['LogonId', 'LogonType', 'StartTime', 'AuthenticationPackage',
              'Status'])
+
+    def loggedon(self):
+        LOGON_TYPES = {
+            0: 'System', 2: 'Interactive', 3: 'Network', 4: 'Batch',
+            5: 'Service', 7: 'Unlock', 8: 'NetworkCleartext',
+            9: 'NewCredentials', 10: 'RemoteInteractive',
+            11: 'CachedInteractive', 12: 'CachedRemoteInteractive',
+        }
+
+        sessions = {}
+        for props in _iter_query(self.__iWbemServices,
+                'SELECT LogonId, LogonType, StartTime, AuthenticationPackage '
+                'FROM Win32_LogonSession '
+                'WHERE LogonType != 0 AND LogonType != 5'):
+            lid = str(props['LogonId']['value'])
+            ltype = props['LogonType']['value']
+            sessions[lid] = {
+                'LogonType': '%s (%s)' % (ltype, LOGON_TYPES.get(ltype, 'Unknown')),
+                'StartTime': props['StartTime']['value'] or '',
+                'AuthPackage': props['AuthenticationPackage']['value'] or '',
+            }
+
+        print('[*] Logged-On Users')
+        count = 0
+        for props in _iter_query(self.__iWbemServices,
+                'SELECT Antecedent, Dependent FROM Win32_LoggedOnUser'):
+            ant = str(props['Antecedent']['value'])
+            dep = str(props['Dependent']['value'])
+
+            domain_m = re.search(r'Domain="([^"]+)"', ant)
+            name_m = re.search(r'Name="([^"]+)"', ant)
+            lid_m = re.search(r'LogonId="([^"]+)"', dep)
+            if not (domain_m and name_m and lid_m):
+                continue
+
+            lid = lid_m.group(1)
+            sess = sessions.get(lid)
+            if not sess:
+                continue
+
+            if count > 0:
+                print('')
+            print('  %-30s %s\\%s' % ('User:', domain_m.group(1), name_m.group(1)))
+            print('  %-30s %s' % ('LogonId:', lid))
+            print('  %-30s %s' % ('LogonType:', sess['LogonType']))
+            print('  %-30s %s' % ('StartTime:', sess['StartTime']))
+            print('  %-30s %s' % ('AuthPackage:', sess['AuthPackage']))
+            count += 1
+
+        if count == 0:
+            print('  (no results)')
+        print('')
 
     def env(self):
         _print_query(self.__iWbemServices,
@@ -1399,6 +1452,7 @@ if __name__ == '__main__':
     enum_sub.add_parser('startup', help='Startup commands / autoruns')
     enum_sub.add_parser('hotfix', help='Installed hotfixes and patches')
     enum_sub.add_parser('sessions', help='Logon sessions')
+    enum_sub.add_parser('loggedon', help='Currently logged-on users with session details')
     enum_sub.add_parser('env', help='Environment variables')
     enum_sub.add_parser('bios', help='BIOS and hardware info (VM detection)')
 
