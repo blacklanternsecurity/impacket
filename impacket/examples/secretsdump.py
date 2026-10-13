@@ -458,7 +458,7 @@ class RemoteOperations:
 
         self.__batchFile = '%TEMP%\\execute.bat'
         self.__shell = '%COMSPEC% /Q /c '
-        self.__output = '%SYSTEMROOT%\\Temp\\__output'
+        self.__output = 'C:\\Users\\Public\\__output'
         self.__answerTMP = b''
 
         self.__execMethod = 'smbexec'
@@ -1284,7 +1284,7 @@ class RemoteOperations:
         tries = 0
         while True:
             try:
-                self.__smbConnection.getFile('ADMIN$', 'Temp\\__output', self.__answer)
+                self.__smbConnection.getFile('C$', '\\Users\\Public\\__output', self.__answer)
                 break
             except Exception as e:
                 if tries > 30:
@@ -1318,7 +1318,7 @@ class RemoteOperations:
            elif line.find(IDSTART) > 0:
                lastShadowId = line[line.find(IDSTART)+len(IDSTART):][:IDLEN-1]
 
-        self.__smbConnection.deleteFile('ADMIN$', 'Temp\\__output')
+        self.__smbConnection.deleteFile('C$', '\\Users\\Public\\__output')
 
         LOG.debug('__getLastVSS found last VSS %s on %s with ID of %s' % (lastShadow.decode('utf-8'), lastShadowFor.decode('utf-8'), lastShadowId.decode('utf-8')))
 
@@ -1370,7 +1370,7 @@ class RemoteOperations:
         # Now copy the ntds.dit to the temp directory
         tmpFileName = ''.join([random.choice(string.ascii_letters) for _ in range(8)]) + '.tmp'
 
-        self.__executeRemote('%%COMSPEC%% /C copy %s%s %%SYSTEMROOT%%\\Temp\\%s' % (shadow, ntdsLocation[2:], tmpFileName))
+        self.__executeRemote('%%COMSPEC%% /C copy %s%s C:\\Users\\Public\\%s' % (shadow, ntdsLocation[2:], tmpFileName))
 
         if shouldRemove is True:
             LOG.debug('Trying to delete shadow copy using command : %%COMSPEC%% /C vssadmin delete shadows /shadow="{%s}" /Quiet' % shadowId)
@@ -1380,7 +1380,7 @@ class RemoteOperations:
         tries = 0
         while True:
             try:
-                self.__smbConnection.deleteFile('ADMIN$', 'Temp\\__output')
+                self.__smbConnection.deleteFile('C$', '\\Users\\Public\\__output')
                 break
             except Exception as e:
                 if tries >= 30:
@@ -1390,10 +1390,10 @@ class RemoteOperations:
                     time.sleep(5)
                     pass
                 else:
-                    logging.error('Cannot delete target file \\\\%s\\ADMIN$\\Temp\\__output: %s' % (self.__smbConnection.getRemoteHost(), str(e)))
+                    logging.error('Cannot delete target file \\\\%s\\C$\\Users\\Public\\__output: %s' % (self.__smbConnection.getRemoteHost(), str(e)))
                     pass
 
-        remoteFileName = RemoteFile(self.__smbConnection, 'Temp\\%s' % tmpFileName)
+        remoteFileName = RemoteFile(self.__smbConnection, '\\Users\\Public\\%s' % tmpFileName)
 
         return remoteFileName
 

@@ -17,7 +17,6 @@ import hashlib
 import random
 import string
 import binascii
-import platform
 from six import b
 
 from impacket.structure import Structure
@@ -35,6 +34,10 @@ from impacket import LOG
 
 USE_NTLMv2 = True # if false will fall back to NTLMv1 (or NTLMv1 with ESS a.k.a NTLM2)
 TEST_CASE = False # Only set to True when running Test Cases
+
+# Generate a stable workstation name once per process so every NTLM handshake
+# from the same tool run reports the same identity (matching real Windows behavior).
+_PROCESS_WORKSTATION = "DESKTOP-" + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(7))
 
 DEFAULT_LM_HASH = binascii.unhexlify('AAD3B435B51404EEAAD3B435B51404EE')
 
@@ -620,11 +623,8 @@ def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlm
 
     # We're not adding workstation / domain fields this time. Normally Windows clients don't add such information but,
     # we will save the workstation name to be used later.
-    #auth.setWorkstation(platform.node().upper())
-    prefix = "DESKTOP-"
-    characters = string.ascii_uppercase + string.digits
-    random_chars = ''.join(random.choice(characters) for _ in range(7))
-    workstation = prefix + random_chars
+    if not workstation:
+        workstation = _PROCESS_WORKSTATION
     auth.setWorkstation(workstation)
 
     return auth

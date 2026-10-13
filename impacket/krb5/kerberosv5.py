@@ -58,16 +58,12 @@ DEFAULT_TGS_ENCTYPES = (
     int(constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value),
     int(constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value),
     int(constants.EncryptionTypes.rc4_hmac.value),
-    int(constants.EncryptionTypes.des3_cbc_sha1_kd.value),
-    int(constants.EncryptionTypes.des_cbc_md5.value),
 )
 
 RC4_PREFERRED_TGS_ENCTYPES = (
     int(constants.EncryptionTypes.rc4_hmac.value),
     int(constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value),
     int(constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value),
-    int(constants.EncryptionTypes.des3_cbc_sha1_kd.value),
-    int(constants.EncryptionTypes.des_cbc_md5.value),
 )
 
 
