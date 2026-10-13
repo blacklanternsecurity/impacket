@@ -611,24 +611,16 @@ def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlm
     auth = NTLMAuthNegotiate()
     auth['flags']=0
     if signingRequired:
-       auth['flags'] = NTLMSSP_NEGOTIATE_KEY_EXCH | NTLMSSP_NEGOTIATE_SIGN | \
+       auth['flags'] = NTLMSSP_NEGOTIATE_KEY_EXCH | NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_ALWAYS_SIGN | \
                        NTLMSSP_NEGOTIATE_SEAL
-    # Windows always sets ALWAYS_SIGN and VERSION in Type 1
-    auth['flags'] |= NTLMSSP_NEGOTIATE_ALWAYS_SIGN | NTLMSSP_NEGOTIATE_VERSION
     if use_ntlmv2:
        auth['flags'] |= NTLMSSP_NEGOTIATE_TARGET_INFO
     auth['flags'] |= NTLMSSP_NEGOTIATE_NTLM | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY | NTLMSSP_NEGOTIATE_UNICODE | \
                      NTLMSSP_REQUEST_TARGET |  NTLMSSP_NEGOTIATE_128 | NTLMSSP_NEGOTIATE_56
 
     if version is not None:
+        auth['flags'] |= NTLMSSP_NEGOTIATE_VERSION
         auth['os_version'] = version
-    else:
-        # Default to a Windows 10 22H2 VERSION structure
-        v = VERSION()
-        v['ProductMajorVersion'] = 10
-        v['ProductMinorVersion'] = 0
-        v['ProductBuild'] = 19045
-        auth['os_version'] = v
 
     # We're not adding workstation / domain fields this time. Normally Windows clients don't add such information but,
     # we will save the workstation name to be used later.
@@ -740,13 +732,6 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
 
     if version is not None:
         ntlmChallengeResponse['Version'] = version
-    elif responseFlags & NTLMSSP_NEGOTIATE_VERSION:
-        # Type 1 set the VERSION flag, so Type 3 must include a VERSION too
-        v = VERSION()
-        v['ProductMajorVersion'] = 10
-        v['ProductMinorVersion'] = 0
-        v['ProductBuild'] = 19045
-        ntlmChallengeResponse['Version'] = v
     ntlmChallengeResponse['ntlm'] = ntResponse
     if encryptedRandomSessionKey is not None: 
         ntlmChallengeResponse['session_key'] = encryptedRandomSessionKey
