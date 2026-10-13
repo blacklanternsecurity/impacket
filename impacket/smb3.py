@@ -30,6 +30,7 @@
 #   [ ] Fix up all the 'ToDo' comments inside the code
 #
 
+import os
 import socket
 import ntpath
 import random
@@ -191,7 +192,7 @@ class SMB3:
         self.RequireMessageSigning = False    #
         self.ConnectionTable = {}
         self.GlobalFileTable = {}
-        self.ClientGuid = ''.join([random.choice(string.ascii_letters) for i in range(16)])
+        self.ClientGuid = os.urandom(16)
         # Only for SMB 3.0
         self.EncryptionAlgorithmList = ['AES-CCM']
         self.MaxDialect = []
@@ -629,13 +630,12 @@ class SMB3:
                 preAuthIntegrityCapabilities['HashAlgorithmCount'] = 1
                 preAuthIntegrityCapabilities['SaltLength'] = 32
                 preAuthIntegrityCapabilities['HashAlgorithms'] = b'\x01\x00'
-                preAuthIntegrityCapabilities['Salt'] = ''.join([rand.choice(string.ascii_letters) for _ in
-                                                                    range(preAuthIntegrityCapabilities['SaltLength'])])
+                preAuthIntegrityCapabilities['Salt'] = os.urandom(preAuthIntegrityCapabilities['SaltLength'])
 
                 negotiateContext['Data'] = preAuthIntegrityCapabilities.getData()
                 negotiateContext['DataLength'] = len(negotiateContext['Data'])
                 contextData['NegotiateContextCount'] += 1
-                pad = b'\xFF' * ((8 - (negotiateContext['DataLength'] % 8)) % 8)
+                pad = b'\x00' * ((8 - (negotiateContext['DataLength'] % 8)) % 8)
 
                 # Add an SMB2_NEGOTIATE_CONTEXT with ContextType as SMB2_ENCRYPTION_CAPABILITIES
                 # to the negotiate request as specified in section 2.2.3.1 and initialize
@@ -658,7 +658,7 @@ class SMB3:
                 contextData['NegotiateContextCount'] += 1
 
                 negSession['ClientStartTime'] = contextData.getData()
-                negSession['Padding'] = b'\xFF\xFF'
+                negSession['Padding'] = b'\x00\x00'
                 # Subsequent negotiate contexts MUST appear at the first 8-byte aligned offset following the
                 # previous negotiate context.
                 negSession['NegotiateContextList'] = negotiateContext.getData() + pad + negotiateContext2.getData()
