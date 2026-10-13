@@ -615,6 +615,8 @@ def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlm
                        NTLMSSP_NEGOTIATE_SEAL
     # Windows always sets ALWAYS_SIGN and VERSION in Type 1
     auth['flags'] |= NTLMSSP_NEGOTIATE_ALWAYS_SIGN | NTLMSSP_NEGOTIATE_VERSION
+    if use_ntlmv2:
+       auth['flags'] |= NTLMSSP_NEGOTIATE_TARGET_INFO
     auth['flags'] |= NTLMSSP_NEGOTIATE_NTLM | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY | NTLMSSP_NEGOTIATE_UNICODE | \
                      NTLMSSP_REQUEST_TARGET |  NTLMSSP_NEGOTIATE_128 | NTLMSSP_NEGOTIATE_56
 
