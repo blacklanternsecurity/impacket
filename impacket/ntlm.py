@@ -764,10 +764,9 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
     # are validated.
     ntlmChallengeResponse['MIC'] = b'\x00' * 16
 
-    LOG.debug("NTLM Type 3: flags=0x%08x len=%d MIC=%s LM_len=%d VERSION=%s" % (
+    LOG.debug("NTLM Type 3: flags=0x%08x len=%d LM_len=%d VERSION=%s" % (
         ntlmChallengeResponse['flags'],
         len(ntlmChallengeResponse.getData()),
-        'computed' if (use_ntlmv2 and av_pairs[NTLMSSP_AV_TIME] is not None) else 'zeroed',
         len(ntlmChallengeResponse['lanman']),
         'present' if (responseFlags & NTLMSSP_NEGOTIATE_VERSION) else 'absent'))
 
