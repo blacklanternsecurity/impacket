@@ -367,10 +367,11 @@ def openFile(fileName, mode='w+', openFileFunc=None):
 
 # Classes
 class RemoteFile:
-    def __init__(self, smbConnection, fileName):
+    def __init__(self, smbConnection, fileName, share='C$'):
         self.__smbConnection = smbConnection
         self.__fileName = fileName
-        self.__tid = self.__smbConnection.connectTree('C$')
+        self.__share = share
+        self.__tid = self.__smbConnection.connectTree(share)
         self.__fid = None
         self.__currentOffset = 0
 
@@ -408,14 +409,14 @@ class RemoteFile:
     def close(self):
         if self.__fid is not None:
             self.__smbConnection.closeFile(self.__tid, self.__fid)
-            self.__smbConnection.deleteFile('C$', self.__fileName)
+            self.__smbConnection.deleteFile(self.__share, self.__fileName)
             self.__fid = None
 
     def tell(self):
         return self.__currentOffset
 
     def __str__(self):
-        return "\\\\%s\\C$\\%s" % (self.__smbConnection.getRemoteHost(), self.__fileName)
+        return "\\\\%s\\%s\\%s" % (self.__smbConnection.getRemoteHost(), self.__share, self.__fileName)
 
 class RemoteOperations:
     def __init__(self, smbConnection, doKerberos, kdcHost=None, ldapConnection=None):
@@ -1367,10 +1368,14 @@ class RemoteOperations:
             # There was already a shadow, let's not delete this
             shouldRemove = False
 
-        # Now copy the ntds.dit to the temp directory
-        tmpFileName = ''.join([random.choice(string.ascii_letters) for _ in range(8)]) + '.tmp'
+        # Now copy the ntds.dit to a temp directory on the same drive
+        tmpFileName = ''.join([random.choice(string.ascii_letters) for _ in range(8)]) + '.bin'
+        # Use the NTDS drive letter to build the share and copy destination
+        ntdsDriveLetter = ntdsDrive[0].upper()
+        ntdsShare = '%s$' % ntdsDriveLetter
+        tmpDest = '%s\\Users\\Public\\%s' % (ntdsDrive, tmpFileName)
 
-        self.__executeRemote('%%COMSPEC%% /C copy %s%s C:\\Users\\Public\\%s' % (shadow, ntdsLocation[2:], tmpFileName))
+        self.__executeRemote('%%COMSPEC%% /C copy %s%s %s' % (shadow, ntdsLocation[2:], tmpDest))
 
         if shouldRemove is True:
             LOG.debug('Trying to delete shadow copy using command : %%COMSPEC%% /C vssadmin delete shadows /shadow="{%s}" /Quiet' % shadowId)
@@ -1393,7 +1398,7 @@ class RemoteOperations:
                     logging.error('Cannot delete target file \\\\%s\\C$\\Users\\Public\\__output: %s' % (self.__smbConnection.getRemoteHost(), str(e)))
                     pass
 
-        remoteFileName = RemoteFile(self.__smbConnection, '\\Users\\Public\\%s' % tmpFileName)
+        remoteFileName = RemoteFile(self.__smbConnection, '\\Users\\Public\\%s' % tmpFileName, share=ntdsShare)
 
         return remoteFileName
 
