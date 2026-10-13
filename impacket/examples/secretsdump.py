@@ -1411,23 +1411,29 @@ class RemoteOperations:
         volumeShare = '%s$' % volumeDrive
 
         LOG.info('Getting SMB equivalent PATH to access remotely the SS')
-        gmtSMBPath = self.__smbConnection.listSnapshots(self.__smbConnection.connectTree(volumeShare), '/')[0]
+        # listSnapshots uses FSCTL_SRV_ENUMERATE_SNAPSHOTS which works
+        # reliably on ADMIN$.  The returned GMT path is a @GMT-... prefix
+        # that works on any share backed by the same volume.
+        gmtSMBPath = self.__smbConnection.listSnapshots(self.__smbConnection.connectTree('ADMIN$'), '/')[0]
         LOG.debug('Got SMB GMT Path: %s' % gmtSMBPath)
         LOG.debug('Performed SS via WMI and got info')
 
-        # SAM/SYSTEM/SECURITY always live on the system drive, so if the
-        # volume is not C: we need a separate snapshot or fall back to the
-        # registry method.  For now we assume they are on the same volume
-        # (the common case for DCs where everything is on C:).
-        paths = [('%s/SAM' % localPath, '%s\\Windows\\System32\\config\\SAM' % gmtSMBPath),
-                 ('%s/SYSTEM' % localPath, '%s\\Windows\\System32\\config\\SYSTEM' % gmtSMBPath),
-                 ('%s/SECURITY' % localPath, '%s\\Windows\\System32\\config\\SECURITY' % gmtSMBPath)]
+        # SAM/SYSTEM/SECURITY live under %SystemRoot%\System32\config on
+        # the system drive.  When read through ADMIN$ (C:\Windows), the
+        # path is relative to that directory.
+        paths = [('%s/SAM' % localPath, '%s\\System32\\config\\SAM' % gmtSMBPath),
+                 ('%s/SYSTEM' % localPath, '%s\\System32\\config\\SYSTEM' % gmtSMBPath),
+                 ('%s/SECURITY' % localPath, '%s\\System32\\config\\SECURITY' % gmtSMBPath)]
+
+        # SAM/SYSTEM/SECURITY are always read via ADMIN$ (system drive)
+        sysShare = 'ADMIN$'
 
         if NTDS:
             # Read the actual NTDS.dit location from the registry instead of
             # assuming the default path.  Strip the drive letter so the path
             # is relative to the shadow snapshot root.
             ntdsRelPath = '\\NTDS\\ntds.dit'
+            ntdsDrive = volumeDrive
             try:
                 ans = rrp.hOpenLocalMachine(self.__rrp)
                 regHandle = ans['phKey']
@@ -1435,6 +1441,7 @@ class RemoteOperations:
                 keyHandle = ans['phkResult']
                 dataType, dataValue = rrp.hBaseRegQueryValue(self.__rrp, keyHandle, 'DSA Database file')
                 ntdsFullPath = dataValue[:-1]  # e.g. 'D:\NTDS\ntds.dit'
+                ntdsDrive = ntdsFullPath[:1].upper()
                 # Strip the drive letter prefix (e.g. 'D:\') to make it relative
                 ntdsRelPath = ntdsFullPath[2:]  # e.g. '\NTDS\ntds.dit'
                 rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
@@ -1446,10 +1453,16 @@ class RemoteOperations:
             LOG.debug('Adding NTDS Path')
             paths.append(('%s/ntds.dit' % localPath, '%s%s' % (gmtSMBPath, ntdsRelPath)))
 
-        for p in paths:
-            LOG.debug("Downloading Remote path: %s to -> %s" % (p[1], p[0]))
+        for i, p in enumerate(paths):
+            # SAM/SYSTEM/SECURITY (first 3) go through ADMIN$;
+            # NTDS.dit goes through the volume share (could be on a different drive)
+            if i < 3:
+                share = sysShare
+            else:
+                share = '%s$' % ntdsDrive
+            LOG.debug("Downloading Remote path: %s from %s to -> %s" % (p[1], share, p[0]))
             with open(p[0], 'wb') as local_file:
-                self.__smbConnection.getFile(volumeShare, p[1], local_file.write)
+                self.__smbConnection.getFile(share, p[1], local_file.write)
 
         # Return a list of the local paths where SAM, SYSTEM and SECURITY were downloaded
         LOG.debug('Trying to delete ShadowSnapshot')
