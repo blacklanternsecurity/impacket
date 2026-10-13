@@ -596,6 +596,14 @@ def ntlmssp_DES_encrypt(key, challenge):
 
 # High level functions to use NTLMSSP
 
+def _default_ntlm_version():
+    """Return a VERSION structure matching Windows 10 22H2."""
+    v = VERSION()
+    v['ProductMajorVersion'] = 10
+    v['ProductMinorVersion'] = 0
+    v['ProductBuild'] = 19045
+    return v
+
 def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlmv2 = USE_NTLMv2, version = None):
     # Let's do some encoding checks before moving on. Kind of dirty, but found effective when dealing with
     # international characters.
@@ -611,16 +619,21 @@ def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlm
     auth = NTLMAuthNegotiate()
     auth['flags']=0
     if signingRequired:
-       auth['flags'] = NTLMSSP_NEGOTIATE_KEY_EXCH | NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_ALWAYS_SIGN | \
+       auth['flags'] = NTLMSSP_NEGOTIATE_KEY_EXCH | NTLMSSP_NEGOTIATE_SIGN | \
                        NTLMSSP_NEGOTIATE_SEAL
+    # Windows 10/11 always sets ALWAYS_SIGN and VERSION in Type 1
+    auth['flags'] |= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
     if use_ntlmv2:
        auth['flags'] |= NTLMSSP_NEGOTIATE_TARGET_INFO
     auth['flags'] |= NTLMSSP_NEGOTIATE_NTLM | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY | NTLMSSP_NEGOTIATE_UNICODE | \
                      NTLMSSP_REQUEST_TARGET |  NTLMSSP_NEGOTIATE_128 | NTLMSSP_NEGOTIATE_56
 
+    # Always include a VERSION structure (Windows clients always do)
+    auth['flags'] |= NTLMSSP_NEGOTIATE_VERSION
     if version is not None:
-        auth['flags'] |= NTLMSSP_NEGOTIATE_VERSION
         auth['os_version'] = version
+    else:
+        auth['os_version'] = _default_ntlm_version()
 
     # We're not adding workstation / domain fields this time. Normally Windows clients don't add such information but,
     # we will save the workstation name to be used later.
@@ -628,6 +641,7 @@ def getNTLMSSPType1(workstation='', domain='', signingRequired = False, use_ntlm
         workstation = _PROCESS_WORKSTATION
     auth.setWorkstation(workstation)
 
+    LOG.debug("NTLM Type 1: flags=0x%08x len=%d workstation=%s" % (auth['flags'], len(auth.getData()), workstation))
     return auth
 
 def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = '', use_ntlmv2 = USE_NTLMv2, channel_binding_value = b'', service='cifs', version=None):
@@ -722,6 +736,9 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
        # [MS-NLMP] page 46
        exportedSessionKey        = keyExchangeKey
 
+    # Windows 10/11 always sets ALWAYS_SIGN and VERSION in Type 3
+    responseFlags |= NTLMSSP_NEGOTIATE_ALWAYS_SIGN | NTLMSSP_NEGOTIATE_VERSION
+
     ntlmChallengeResponse['flags'] = responseFlags
     ntlmChallengeResponse['domain_name'] = domain.encode('utf-16le')
     ntlmChallengeResponse['host_name'] = type1.getWorkstation().encode('utf-16le')
@@ -730,11 +747,28 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
     else:
         ntlmChallengeResponse['lanman'] = lmResponse
 
+    # Always include VERSION in Type 3 (required when the flag is set,
+    # and checkMIC/checkVersion use the flag to size the structure)
     if version is not None:
         ntlmChallengeResponse['Version'] = version
+    else:
+        ntlmChallengeResponse['Version'] = _default_ntlm_version()
+
     ntlmChallengeResponse['ntlm'] = ntResponse
-    if encryptedRandomSessionKey is not None: 
+    if encryptedRandomSessionKey is not None:
         ntlmChallengeResponse['session_key'] = encryptedRandomSessionKey
+
+    # MIC (Message Integrity Code) per [MS-NLMP] 3.1.5.2.1
+    # When VERSION is set, the Type 3 structure reserves 16 bytes for the MIC.
+    # We zero it for now; MIC computation will be added once the base changes
+    # are validated.
+    ntlmChallengeResponse['MIC'] = b'\x00' * 16
+
+    LOG.debug("NTLM Type 3: flags=0x%08x len=%d LM_len=%d VERSION=%s" % (
+        ntlmChallengeResponse['flags'],
+        len(ntlmChallengeResponse.getData()),
+        len(ntlmChallengeResponse['lanman']),
+        'present' if (responseFlags & NTLMSSP_NEGOTIATE_VERSION) else 'absent'))
 
     return ntlmChallengeResponse, exportedSessionKey
 
@@ -947,18 +981,28 @@ def computeResponseNTLMv2(flags, serverChallenge, clientChallenge, serverName, d
     # get access denied
     # This is set at Local Security Policy -> Local Policies -> Security Options -> Server SPN target name validation
     # level
+    hasTimestamp = False
     if TEST_CASE is False:
         av_pairs[NTLMSSP_AV_TARGET_NAME] = f"{service}/".encode('utf-16le') + av_pairs[NTLMSSP_AV_DNS_HOSTNAME][1]
         if av_pairs[NTLMSSP_AV_TIME] is not None:
            aTime = av_pairs[NTLMSSP_AV_TIME][1]
+           hasTimestamp = True
         else:
            aTime = struct.pack('<q', (116444736000000000 + calendar.timegm(time.gmtime()) * 10000000) )
            av_pairs[NTLMSSP_AV_TIME] = aTime
+
+        # Add channel bindings (Z(16) when no TLS channel binding)
+        if hasTimestamp:
+            if len(channel_binding_value) > 0:
+                av_pairs[NTLMSSP_AV_CHANNEL_BINDINGS] = channel_binding_value
+            else:
+                av_pairs[NTLMSSP_AV_CHANNEL_BINDINGS] = b'\x00' * 16
+
         serverName = av_pairs.getData()
     else:
         aTime = b'\x00'*8
-    
-    if len(channel_binding_value) > 0:
+
+    if len(channel_binding_value) > 0 and not hasTimestamp:
         av_pairs[NTLMSSP_AV_CHANNEL_BINDINGS] = channel_binding_value
 
     # Format according to:
@@ -975,8 +1019,14 @@ def computeResponseNTLMv2(flags, serverChallenge, clientChallenge, serverName, d
     ntProofStr = hmac_md5(responseKeyNT, serverChallenge + temp)
 
     ntChallengeResponse = ntProofStr + temp
-    lmChallengeResponse = hmac_md5(responseKeyNT, serverChallenge + clientChallenge) + clientChallenge
     sessionBaseKey = hmac_md5(responseKeyNT, ntProofStr)
+
+    # [MS-NLMP] 3.1.5.1.2: when MsvAvTimestamp is present, the LM
+    # response MUST be Z(24) (not a real LMv2 computation)
+    if hasTimestamp:
+        lmChallengeResponse = b'\x00' * 24
+    else:
+        lmChallengeResponse = hmac_md5(responseKeyNT, serverChallenge + clientChallenge) + clientChallenge
 
     if user == '' and password == '':
         # Special case for anonymous authentication
