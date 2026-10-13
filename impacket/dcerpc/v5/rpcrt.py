@@ -1991,6 +1991,7 @@ class DCERPC_v5(DCERPC):
 
         answer.set_ctx_id(self._ctx+1)
         answer.__callid = self.__callid
+        answer._DCERPC_v5__auth_ctx_base = self.__auth_ctx_base
         answer.bind(newUID, alter = 1, bogus_binds = bogus_binds, transfer_syntax = bin_to_uuidtup(self.transfer_syntax))
         return answer
 
