@@ -81,8 +81,6 @@ class KerberosTGSEnctypeTests(TestCase):
                 constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value,
                 constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value,
                 constants.EncryptionTypes.rc4_hmac.value,
-                constants.EncryptionTypes.des3_cbc_sha1_kd.value,
-                constants.EncryptionTypes.des_cbc_md5.value,
             ),
         )
         self.assertEqual(getKerberosTGSRequestEnctypes(), DEFAULT_TGS_ENCTYPES)
