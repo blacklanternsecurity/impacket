@@ -21,9 +21,6 @@
 #   LDAP
 #
 
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 from datetime import datetime
 from impacket import version
 from impacket.dcerpc.v5 import transport
@@ -273,9 +270,8 @@ if __name__ == '__main__':
                                                                               'If ommited, the domain part (FQDN) '
                                                                               'specified in the account parameter will be used')
     
-    group.add_argument('-ldaps', dest='ldaps_flag', action="store_true", help='Enable LDAPS (LDAP over SSL). '
-                                                                                'Required when querying a Windows Server 2025'
-                                                                                'domain controller with LDAPS enforced.')
+    group.add_argument('-ldaps', '-use-ldaps', dest='ldaps_flag', action='store_true',
+                       help='Use LDAPS instead of LDAP')
 
     if len(sys.argv)==1:
         parser.print_help()
