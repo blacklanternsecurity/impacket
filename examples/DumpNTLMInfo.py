@@ -105,10 +105,10 @@ class RPC:
         sec_trailer = SEC_TRAILER()
         sec_trailer['auth_type']   = RPC_C_AUTHN_WINNT
         sec_trailer['auth_level']  = RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
-        sec_trailer['auth_ctx_id'] = 0 + 79231 
+        sec_trailer['auth_ctx_id'] = 0 
         pad = (4 - (len(packet.get_packet()) % 4)) % 4
         if pad != 0:
-           packet['pduData'] += b'\xFF'*pad
+           packet['pduData'] += b'\x00'*pad
            sec_trailer['auth_pad_len']=pad
         packet['sec_trailer'] = sec_trailer
         packet['auth_data'] = auth

@@ -18,6 +18,7 @@
 
 import re
 import binascii
+import uuid as _uuid_mod
 
 from random import randrange
 from struct import pack, unpack
@@ -26,9 +27,12 @@ EMPTY_UUID = b'\x00'*16
 
 
 def generate():
-    # UHm... crappy Python has an maximum integer of 2**31-1.
-    top = (1<<31)-1
-    return pack("IIII", randrange(top), randrange(top), randrange(top), randrange(top))
+    # Emit a proper RFC 4122 version-4 UUID in MS wire format (variant 2,
+    # little-endian first three fields).  The stdlib uuid4() returns bytes in
+    # network order; we must repack the first three fields to LE so that
+    # Wireshark / dissectors see version=4 and variant=8-b.
+    u = _uuid_mod.uuid4()
+    return u.bytes_le
 
 
 def bin_to_string(uuid):
