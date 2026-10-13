@@ -191,7 +191,8 @@ class RDPRelayServer(Thread):
 
             try:
                 # Generate self-signed certificate for TLS
-                priv_key_path, cert_path = generate_self_signed_cert("RDP-Server")
+                from impacket.ntlm import _PROCESS_WORKSTATION
+                priv_key_path, cert_path = generate_self_signed_cert(_PROCESS_WORKSTATION)
                 server_ctx = ServerTLSContext(priv_key_path, cert_path)
                 client_tls_ctx = server_ctx.getContext()
 

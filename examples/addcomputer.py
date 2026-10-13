@@ -235,7 +235,7 @@ class ADDCOMPUTER:
         return None
 
     def generateComputerName(self):
-        return 'DESKTOP-' + (''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8)) + '$')
+        return 'DESKTOP-' + (''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(7)) + '$')
 
     def getComputerHostname(self):
         return self.__computerName[:-1]

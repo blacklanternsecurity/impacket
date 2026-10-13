@@ -166,7 +166,7 @@ class LDAPAttack(ProtocolAttack):
         computerName = self.computerName
         if not computerName:
             # Random computername
-            newComputer = (''.join(random.choice(string.ascii_letters) for _ in range(8)) + '$').upper()
+            newComputer = ('DESKTOP-' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(7)) + '$')
         else:
             newComputer = computerName if computerName.endswith('$') else computerName + '$'
 

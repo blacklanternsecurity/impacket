@@ -1255,7 +1255,8 @@ class RemoteOperations:
         dcom.disconnect()
 
     def __executeRemote(self, data):
-        self.__tmpServiceName = ''.join([random.choice(string.ascii_letters) for _ in range(8)])
+        _svc_prefix = random.choice(['Win', 'Sys', 'Net', 'Svc', 'App', 'Wmi'])
+        self.__tmpServiceName = _svc_prefix + ''.join([random.choice(string.ascii_lowercase) for _ in range(random.randint(4, 8))])
         command = self.__shell + 'echo ' + data + ' ^> ' + self.__output + ' > ' + self.__batchFile + ' & ' + \
                   self.__shell + self.__batchFile
         command += ' & ' + 'del ' + self.__batchFile
