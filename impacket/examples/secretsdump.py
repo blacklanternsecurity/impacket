@@ -1428,38 +1428,58 @@ class RemoteOperations:
         # SAM/SYSTEM/SECURITY are always read via ADMIN$ (system drive)
         sysShare = 'ADMIN$'
 
+        # Track which share each path should be read from
+        shares = [sysShare, sysShare, sysShare]
+
         if NTDS:
-            # Read the actual NTDS.dit location from the registry instead of
-            # assuming the default path.  Strip the drive letter so the path
-            # is relative to the shadow snapshot root.
+            # Try to read the actual NTDS.dit location from the registry.
+            # The default path (%SystemRoot%\NTDS\ntds.dit) is relative to
+            # ADMIN$ so we can use that share directly.  Only when the
+            # registry tells us NTDS is on a different drive do we switch
+            # to that drive's admin share.
             ntdsRelPath = '\\NTDS\\ntds.dit'
-            ntdsDrive = volumeDrive
+            ntdsShare = sysShare  # default: same as SAM/SYSTEM/SECURITY
             try:
-                ans = rrp.hOpenLocalMachine(self.__rrp)
-                regHandle = ans['phKey']
-                ans = rrp.hBaseRegOpenKey(self.__rrp, regHandle, 'SYSTEM\\CurrentControlSet\\Services\\NTDS\\Parameters')
-                keyHandle = ans['phkResult']
-                dataType, dataValue = rrp.hBaseRegQueryValue(self.__rrp, keyHandle, 'DSA Database file')
-                ntdsFullPath = dataValue[:-1]  # e.g. 'D:\NTDS\ntds.dit'
-                ntdsDrive = ntdsFullPath[:1].upper()
-                # Strip the drive letter prefix (e.g. 'D:\') to make it relative
-                ntdsRelPath = ntdsFullPath[2:]  # e.g. '\NTDS\ntds.dit'
-                rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
-                rrp.hBaseRegCloseKey(self.__rrp, regHandle)
-                LOG.debug('Registry says NTDS.dit is at %s' % ntdsFullPath)
+                if self.__rrp is not None:
+                    ans = rrp.hOpenLocalMachine(self.__rrp)
+                    regHandle = ans['phKey']
+                    ans = rrp.hBaseRegOpenKey(self.__rrp, regHandle, 'SYSTEM\\CurrentControlSet\\Services\\NTDS\\Parameters')
+                    keyHandle = ans['phkResult']
+                    dataType, dataValue = rrp.hBaseRegQueryValue(self.__rrp, keyHandle, 'DSA Database file')
+                    ntdsFullPath = dataValue[:-1]  # e.g. 'D:\NTDS\ntds.dit'
+                    ntdsDrive = ntdsFullPath[:1].upper()
+                    rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+                    rrp.hBaseRegCloseKey(self.__rrp, regHandle)
+                    LOG.debug('Registry says NTDS.dit is at %s' % ntdsFullPath)
+
+                    # Check if NTDS is on a different drive than the system drive
+                    if ntdsDrive != 'C':
+                        # Strip the drive letter to get a path relative to the drive root
+                        ntdsRelPath = ntdsFullPath[2:]  # e.g. '\NTDS\ntds.dit'
+                        ntdsShare = '%s$' % ntdsDrive
+                    else:
+                        # On the system drive — strip %SystemRoot% prefix to make it
+                        # relative to ADMIN$.  The registry stores it as e.g.
+                        # 'C:\Windows\NTDS\ntds.dit'; we need '\NTDS\ntds.dit'
+                        # relative to C:\Windows (ADMIN$).
+                        winDir = os.environ.get('SystemRoot', 'C:\\Windows')
+                        # Use a simple heuristic: strip 'C:\Windows' or just 'C:\'
+                        stripped = ntdsFullPath[2:]  # '\Windows\NTDS\ntds.dit'
+                        if stripped.upper().startswith('\\WINDOWS\\'):
+                            ntdsRelPath = stripped[len('\\WINDOWS'):]  # '\NTDS\ntds.dit'
+                        else:
+                            # Non-standard SystemRoot; fall back to drive share
+                            ntdsRelPath = stripped
+                            ntdsShare = 'C$'
             except Exception as e:
                 LOG.debug('Could not read NTDS path from registry, using default: %s' % str(e))
 
             LOG.debug('Adding NTDS Path')
             paths.append(('%s/ntds.dit' % localPath, '%s%s' % (gmtSMBPath, ntdsRelPath)))
+            shares.append(ntdsShare)
 
         for i, p in enumerate(paths):
-            # SAM/SYSTEM/SECURITY (first 3) go through ADMIN$;
-            # NTDS.dit goes through the volume share (could be on a different drive)
-            if i < 3:
-                share = sysShare
-            else:
-                share = '%s$' % ntdsDrive
+            share = shares[i]
             LOG.debug("Downloading Remote path: %s from %s to -> %s" % (p[1], share, p[0]))
             with open(p[0], 'wb') as local_file:
                 self.__smbConnection.getFile(share, p[1], local_file.write)
