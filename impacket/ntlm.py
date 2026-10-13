@@ -758,19 +758,11 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
     if encryptedRandomSessionKey is not None:
         ntlmChallengeResponse['session_key'] = encryptedRandomSessionKey
 
-    # Compute the MIC (Message Integrity Code) per [MS-NLMP] 3.1.5.1.2
-    # The MIC is an HMAC-MD5 over Type1 || Type2 || Type3 (with MIC zeroed)
-    # Windows computes a MIC whenever the server's challenge contains
-    # MsvAvTimestamp, which is always the case with modern DCs.
-    av_pairs = AV_PAIRS(ntlmChallenge['TargetInfoFields'])
-    if use_ntlmv2 and av_pairs[NTLMSSP_AV_TIME] is not None:
-        # Zero the MIC field first, then compute over the concatenation
-        ntlmChallengeResponse['MIC'] = b'\x00' * 16
-        type3data = ntlmChallengeResponse.getData()
-        mic = hmac_md5(exportedSessionKey, type1.getData() + type2 + type3data)
-        ntlmChallengeResponse['MIC'] = mic
-    else:
-        ntlmChallengeResponse['MIC'] = b'\x00' * 16
+    # MIC (Message Integrity Code) per [MS-NLMP] 3.1.5.2.1
+    # When VERSION is set, the Type 3 structure reserves 16 bytes for the MIC.
+    # We zero it for now; MIC computation will be added once the base changes
+    # are validated.
+    ntlmChallengeResponse['MIC'] = b'\x00' * 16
 
     LOG.debug("NTLM Type 3: flags=0x%08x len=%d MIC=%s LM_len=%d VERSION=%s" % (
         ntlmChallengeResponse['flags'],
@@ -1000,12 +992,8 @@ def computeResponseNTLMv2(flags, serverChallenge, clientChallenge, serverName, d
            aTime = struct.pack('<q', (116444736000000000 + calendar.timegm(time.gmtime()) * 10000000) )
            av_pairs[NTLMSSP_AV_TIME] = aTime
 
-        # [MS-NLMP] 3.1.5.1.2: when the server sends MsvAvTimestamp, the
-        # client MUST set MsvAvFlags bit 0x2 (MIC provided) and add
-        # MsvAvChannelBindings.
+        # Add channel bindings (Z(16) when no TLS channel binding)
         if hasTimestamp:
-            av_pairs[NTLMSSP_AV_FLAGS] = struct.pack('<L', 0x0002)
-            # Add channel bindings (Z(16) when no TLS channel binding)
             if len(channel_binding_value) > 0:
                 av_pairs[NTLMSSP_AV_CHANNEL_BINDINGS] = channel_binding_value
             else:
