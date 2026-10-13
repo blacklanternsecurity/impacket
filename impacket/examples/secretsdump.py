@@ -1212,7 +1212,7 @@ class RemoteOperations:
                               oxidResolver=False, doKerberos=self.__doKerberos, kdcHost=self.__kdcHost)
         iInterface = dcom.CoCreateInstanceEx(wmi.CLSID_WbemLevel1Login,wmi.IID_IWbemLevel1Login)
         iWbemLevel1Login = wmi.IWbemLevel1Login(iInterface)
-        iWbemServices= iWbemLevel1Login.NTLMLogin('//./root/cimv2', NULL, NULL)
+        iWbemServices= iWbemLevel1Login.NTLMLogin('\\\\.\\root\\cimv2', NULL, NULL)
         iWbemLevel1Login.RemRelease()
 
         win32Process,_ = iWbemServices.GetObject('Win32_Process')
@@ -1226,7 +1226,7 @@ class RemoteOperations:
                               oxidResolver=False, doKerberos=self.__doKerberos, kdcHost=self.__kdcHost)
         iInterface = dcom.CoCreateInstanceEx(wmi.CLSID_WbemLevel1Login,wmi.IID_IWbemLevel1Login)
         iWbemLevel1Login = wmi.IWbemLevel1Login(iInterface)
-        iWbemServices= iWbemLevel1Login.NTLMLogin('//./root/cimv2', NULL, NULL)
+        iWbemServices= iWbemLevel1Login.NTLMLogin('\\\\.\\root\\cimv2', NULL, NULL)
         iWbemLevel1Login.RemRelease()
 
         win32ShadowCopy,_ = iWbemServices.GetObject('Win32_ShadowCopy')
@@ -1246,7 +1246,7 @@ class RemoteOperations:
                               oxidResolver=False, doKerberos=self.__doKerberos, kdcHost=self.__kdcHost)
         iInterface = dcom.CoCreateInstanceEx(wmi.CLSID_WbemLevel1Login,wmi.IID_IWbemLevel1Login)
         iWbemLevel1Login = wmi.IWbemLevel1Login(iInterface)
-        iWbemServices = iWbemLevel1Login.NTLMLogin('//./root/cimv2', NULL, NULL)
+        iWbemServices = iWbemLevel1Login.NTLMLogin('\\\\.\\root\\cimv2', NULL, NULL)
         iWbemLevel1Login.RemRelease()
 
         wmiPath = 'Win32_ShadowCopy.ID="%s"' % ssID
