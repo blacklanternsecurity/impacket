@@ -36,6 +36,7 @@ from hashlib import md5
 import struct
 import socket
 import select
+import os
 import random
 import binascii
 import errno
@@ -1831,6 +1832,7 @@ class MSSQL:
         login["ServerName"] = self.remoteName.encode("utf-16le")
         login["CltIntName"] = self.client_interface_name.encode("utf-16le")
         login["ClientPID"] = random.randint(0, 1024)
+        login["ClientID"] = os.urandom(6)
         login["PacketSize"] = self.packetSize
         if database is not None:
             login["Database"] = database.encode("utf-16le")
@@ -2131,6 +2133,7 @@ class MSSQL:
         login["ServerName"] = self.remoteName.encode("utf-16le")
         login["CltIntName"] = self.client_interface_name.encode("utf-16le")
         login["ClientPID"] = random.randint(0, 1024)
+        login["ClientID"] = os.urandom(6)
         login["PacketSize"] = self.packetSize
         if database is not None:
             login["Database"] = database.encode("utf-16le")
