@@ -49,8 +49,6 @@
 #   [ ] Transform the rest of the calls to structure
 #   [X] Implement TRANS/TRANS2 reassembly for list_path
 #
-from __future__ import division
-from __future__ import print_function
 
 import os
 import socket
@@ -3533,7 +3531,7 @@ class SMB(object):
         blob = SPNEGO_NegTokenInit()
 
         # Kerberos v5 mech
-        blob['MechTypes'] = [TypesMech['MS KRB5 - Microsoft Kerberos 5']]
+        blob['MechTypes'] = [TypesMech['KRB5 - Kerberos 5'], TypesMech['MS KRB5 - Microsoft Kerberos 5']]
 
         # Let's extract the ticket from the TGS
         tgs = decoder.decode(tgs, asn1Spec = TGS_REP())[0]
@@ -3681,6 +3679,8 @@ class SMB(object):
                 LOG.debug("Session setup response parsing failed: %s", e)
                 raise SessionError("Authentication failed: invalid or truncated server response", 0x006D, 0xC000, 1, None)
             respToken = SPNEGO_NegTokenResp(sessionData['SecurityBlob'])
+            if respToken.isNegoExSelected():
+                raise NotImplementedError('NEGOEX / PKU2U authentication is not implemented yet')
 
             # Let's parse some data and keep it to ourselves in case it is asked
             ntlmChallenge = ntlm.NTLMAuthChallenge(respToken['ResponseToken'])

@@ -36,8 +36,6 @@
 #       getInterface() method
 #
 
-from __future__ import division
-from __future__ import print_function
 import argparse
 import cmd
 import logging
@@ -45,6 +43,8 @@ import ntpath
 import os
 import sys
 import time
+import random
+import string
 from base64 import b64encode
 
 from six import PY2, PY3
@@ -61,7 +61,7 @@ from impacket.examples.utils import parse_target
 from impacket.smbconnection import SMBConnection, SMB_DIALECT, SMB2_DIALECT_002, SMB2_DIALECT_21
 from impacket.krb5.keytab import Keytab
 
-OUTPUT_FILENAME = '__' + str(time.time())[:5]
+OUTPUT_FILENAME = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(random.randint(8, 14))) + '.tmp'
 CODEC = sys.stdout.encoding
 
 class DCOMEXEC:

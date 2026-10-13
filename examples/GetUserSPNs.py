@@ -30,8 +30,6 @@
 #   [X] Add the capability for requesting TGS and output them in JtR/hashcat format
 #
 
-from __future__ import division
-from __future__ import print_function
 import argparse
 import logging
 import sys
@@ -94,6 +92,7 @@ class GetUserSPNs:
         self.__stealth = cmdLineOptions.stealth
         self.__machineOnly = cmdLineOptions.machine_only
         self.__requestMachine = cmdLineOptions.request_machine
+        self.__ldaps = cmdLineOptions.ldaps_flag
 
         if cmdLineOptions.hashes is not None:
             self.__lmhash, self.__nthash = cmdLineOptions.hashes.split(':')
@@ -238,7 +237,7 @@ class GetUserSPNs:
             return
 
         # Connect to LDAP
-        ldapConnection = ldap_login(self.__target, self.baseDN, self.__kdcIP, self.__kdcHost, self.__doKerberos, self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash, self.__aesKey, target_domain=self.__targetDomain, fqdn=True)
+        ldapConnection = ldap_login(self.__target, self.baseDN, self.__kdcIP, self.__kdcHost, self.__doKerberos, self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash, self.__aesKey, ldaps_flag=self.__ldaps, target_domain=self.__targetDomain, fqdn=True)
         # updating "self.__target" as it may have changed in the ldap_login processing
         self.__target = ldapConnection._dstHost
 
@@ -502,7 +501,8 @@ if __name__ == '__main__':
     group.add_argument('-dc-host', action='store', metavar='hostname', help='Hostname of the domain controller to use. '
                                                                             'If ommited, the domain part (FQDN) '
                                                                             'specified in the account parameter will be used')
-
+    group.add_argument('-ldaps', '-use-ldaps', dest='ldaps_flag', action='store_true',
+                       help='Use LDAPS instead of LDAP')
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)

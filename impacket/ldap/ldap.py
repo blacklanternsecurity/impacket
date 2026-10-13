@@ -272,7 +272,7 @@ class LDAPConnection:
         blob = SPNEGO_NegTokenInit()
 
         # Kerberos
-        blob['MechTypes'] = [TypesMech['MS KRB5 - Microsoft Kerberos 5']]
+        blob['MechTypes'] = [TypesMech['KRB5 - Kerberos 5'], TypesMech['MS KRB5 - Microsoft Kerberos 5']]
 
         # Let's extract the ticket from the TGS
         tgs = decoder.decode(tgs, asn1Spec=TGS_REP())[0]
@@ -414,7 +414,7 @@ class LDAPConnection:
                 channel_binding_value = self.channel_binding_value
 
             # NTLM Auth
-            type3, exportedSessionKey = getNTLMSSPType3(negotiate, bytes(type2), user, password, domain, lmhash, nthash, channel_binding_value=channel_binding_value)
+            type3, exportedSessionKey = getNTLMSSPType3(negotiate, bytes(type2), user, password, domain, lmhash, nthash, service='ldap', channel_binding_value=channel_binding_value)
             bindRequest['authentication']['sicilyResponse'] = type3.getData()
             response = self.sendReceive(bindRequest)[0]['protocolOp']
         elif authenticationChoice == 'sasl':
@@ -451,6 +451,9 @@ class LDAPConnection:
             # NTLM Challenge
             serverSaslCreds = response['bindResponse']['serverSaslCreds']
             spnegoTokenResp = SPNEGO_NegTokenResp(serverSaslCreds.asOctets())
+            if spnegoTokenResp.isNegoExSelected():
+                raise LDAPSessionError(errorString='NEGOEX / PKU2U authentication is not implemented yet')
+                #should this be a LDAPSessionError or an NotImplementedError?
             type2 = spnegoTokenResp['ResponseToken']
             
             # channel binding

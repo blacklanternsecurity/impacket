@@ -45,8 +45,6 @@
 #   [ ] When -request is specified, we could ask for a user2user ticket and also populate the received PAC
 #
 
-from __future__ import division
-from __future__ import print_function
 import argparse
 import datetime
 import logging
@@ -1071,7 +1069,7 @@ class TICKETER:
         encRepPart['last-req'][0] = noValue
         encRepPart['last-req'][0]['lr-type'] = 0
         encRepPart['last-req'][0]['lr-value'] = KerberosTime.to_asn1(datetime.datetime.now(datetime.timezone.utc))
-        encRepPart['nonce'] = 123456789
+        encRepPart['nonce'] = random.getrandbits(31)
         encRepPart['key-expiration'] = KerberosTime.to_asn1(ticketDuration)
         flags = []
         for i in encTicketPart['flags']:

@@ -30,10 +30,16 @@ from impacket.smb3structs import FILE_WRITE_DATA, FILE_DIRECTORY_FILE
 class ServiceInstall:
     def __init__(self, SMBObject, exeFile, serviceName='', binary_service_name=None):
         self._rpctransport = 0
-        self.__service_name = serviceName if len(serviceName) > 0  else  ''.join([random.choice(string.ascii_letters) for i in range(4)])
+        if len(serviceName) > 0:
+            self.__service_name = serviceName
+        else:
+            # Generate a realistic-looking Windows service name
+            _svc_prefix = random.choice(['Win', 'Sys', 'Net', 'Svc', 'App', 'Wmi'])
+            self.__service_name = _svc_prefix + ''.join([random.choice(string.ascii_lowercase) for i in range(random.randint(4, 8))])
 
         if binary_service_name is None:
-            self.__binary_service_name = ''.join([random.choice(string.ascii_letters) for i in range(8)]) + '.exe'
+            _bin_prefix = random.choice(['svc', 'wmi', 'net', 'app', 'sys'])
+            self.__binary_service_name = _bin_prefix + ''.join([random.choice(string.ascii_lowercase + string.digits) for i in range(random.randint(4, 8))]) + '.exe'
         else:
             self.__binary_service_name = binary_service_name
             

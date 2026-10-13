@@ -13,6 +13,7 @@ import logging
 import struct
 import pytest
 import unittest
+from unittest import mock
 from tests import RemoteTestCase
 
 from impacket.dcerpc.v5 import samr
@@ -262,6 +263,47 @@ class Options(object):
 
 
 class NTDSHashesUnitTests(unittest.TestCase):
+
+    def test_trust_key_history_is_controlled_by_history_option(self):
+        class FakeESEDB:
+            def openTable(self, table_name):
+                self.returned = False
+                return object()
+
+            def getNextRow(self, cursor, filter_tables=None):
+                if self.returned:
+                    return None
+                self.returned = True
+                return self.record
+
+        # per trust value, with an authoritative flat name: rc4 + aes256 + aes256(trust account)
+        # + aes128 + aes128(trust account)
+        for history, expected_lines in ((False, 5), (True, 10)):
+            with self.subTest(history=history):
+                esedb = FakeESEDB()
+                esedb.record = {
+                    NTDSHashes.NAME_TO_INTERNAL['trustPartner']: 'partner.example',
+                    NTDSHashes.NAME_TO_INTERNAL['flatName']: 'PARTNER',
+                    NTDSHashes.NAME_TO_INTERNAL['trustAuthIncoming']: b'encrypted',
+                    NTDSHashes.NAME_TO_INTERNAL['trustAuthOutgoing']: None,
+                }
+
+                ntds = object.__new__(NTDSHashes)
+                ntds._NTDSHashes__domainFQDN = 'local.example'
+                ntds._NTDSHashes__securityHive = None
+                ntds._NTDSHashes__ESEDB = esedb
+                ntds._NTDSHashes__history = history
+                ntds._NTDSHashes__justNTLM = False
+                output = []
+                ntds._NTDSHashes__perSecretCallback = lambda secret_type, line: output.append(line)
+                ntds._NTDSHashes__decryptTrustAuthBlob = lambda value: b'trust-auth-info'
+
+                with mock.patch('impacket.examples.secretsdump._parse_trust_auth_info',
+                                return_value=(b'current-secret', b'previous-secret')):
+                    ntds._NTDSHashes__dumpTrustKeysOffline()
+
+                self.assertEqual(expected_lines, len(output))
+                self.assertEqual(history, any(', previous)' in line for line in output))
 
     def test_header_only_supplemental_credentials_are_ignored(self):
         header_only_properties = (

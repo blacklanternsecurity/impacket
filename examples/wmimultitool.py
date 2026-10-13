@@ -67,11 +67,11 @@ TYPE_MAP = {
 }
 
 NAMESPACE_MAP = {
-    'reg':      '//./root/default',
-    'defender': '//./root/Microsoft/Windows/Defender',
-    'av':       '//./root/SecurityCenter2',
-    'net':      '//./root/StandardCimv2',
-    'rdp':      '//./root/cimv2/TerminalServices',
+    'reg':      '\\\\.\\root\\default',
+    'defender': '\\\\.\\root\\Microsoft\\Windows\\Defender',
+    'av':       '\\\\.\\root\\SecurityCenter2',
+    'net':      '\\\\.\\root\\StandardCimv2',
+    'rdp':      '\\\\.\\root\\cimv2\\TerminalServices',
 }
 
 
@@ -89,7 +89,7 @@ class WMIConnection:
         self.__doKerberos = doKerberos
         self.__kdcHost = kdcHost
 
-    def connect(self, namespace='//./root/cimv2'):
+    def connect(self, namespace='\\\\.\\root\\cimv2'):
         dcom = DCOMConnection(self.__host, self.__username, self.__password,
                               self.__domain, self.__lmhash, self.__nthash,
                               self.__aesKey, oxidResolver=False,
@@ -1143,7 +1143,7 @@ class WMIMultiTool:
             self.__lmhash, self.__nthash = options.hashes.split(':')
 
     def run(self, remoteName, remoteHost):
-        namespace = NAMESPACE_MAP.get(self.__options.action, '//./root/cimv2')
+        namespace = NAMESPACE_MAP.get(self.__options.action, '\\\\.\\root\\cimv2')
 
         conn = WMIConnection(remoteHost, self.__username, self.__password,
                              self.__domain, self.__lmhash, self.__nthash,

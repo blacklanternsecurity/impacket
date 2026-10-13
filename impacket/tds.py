@@ -28,10 +28,6 @@
 #   [ ] printRows is crappy, just an easy way to print the rows. It should be
 #       rewritten to output like a normal SQL client
 
-
-from __future__ import division
-from __future__ import print_function
-
 # Native SSL support for in memory handshake
 import ssl
 
@@ -40,6 +36,7 @@ from hashlib import md5
 import struct
 import socket
 import select
+import os
 import random
 import binascii
 import errno
@@ -1835,6 +1832,7 @@ class MSSQL:
         login["ServerName"] = self.remoteName.encode("utf-16le")
         login["CltIntName"] = self.client_interface_name.encode("utf-16le")
         login["ClientPID"] = random.randint(0, 1024)
+        login["ClientID"] = os.urandom(6)
         login["PacketSize"] = self.packetSize
         if database is not None:
             login["Database"] = database.encode("utf-16le")
@@ -1988,7 +1986,7 @@ class MSSQL:
         blob = SPNEGO_NegTokenInit()
 
         # Kerberos
-        blob["MechTypes"] = [TypesMech["MS KRB5 - Microsoft Kerberos 5"]]
+        blob["MechTypes"] = [TypesMech["KRB5 - Kerberos 5"], TypesMech["MS KRB5 - Microsoft Kerberos 5"]]
 
         # Let's extract the ticket from the TGS
         tgs = decoder.decode(tgs, asn1Spec=TGS_REP())[0]
@@ -2135,6 +2133,7 @@ class MSSQL:
         login["ServerName"] = self.remoteName.encode("utf-16le")
         login["CltIntName"] = self.client_interface_name.encode("utf-16le")
         login["ClientPID"] = random.randint(0, 1024)
+        login["ClientID"] = os.urandom(6)
         login["PacketSize"] = self.packetSize
         if database is not None:
             login["Database"] = database.encode("utf-16le")

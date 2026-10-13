@@ -30,8 +30,6 @@
 #       not used, returning RPC_E_DISCONNECTED
 #
 
-from __future__ import division
-from __future__ import print_function
 import ipaddress
 import socket
 from struct import pack
@@ -1617,7 +1615,7 @@ class IActivation:
         request['Clsid'] = clsId
         request['pwszObjectName'] = NULL
         request['pObjectStorage'] = NULL
-        request['ClientImpLevel'] = 2
+        #request['ClientImpLevel'] = 2
         request['Mode'] = 0
         request['Interfaces'] = 1
 
@@ -1712,7 +1710,7 @@ class IRemoteSCMActivator:
         activationBLOB['CustomHeader']['pSizes'].append(dword)
         instantiationInfo['thisSize'] = dword['Data']
 
-        properties += marshaled + b'\xFA'*pad
+        properties += marshaled + b'\x00'*pad
 
         # ActivationContextInfoData
         activationInfo = ActivationContextInfoData()
@@ -1725,7 +1723,7 @@ class IRemoteSCMActivator:
         dword['Data'] = len(marshaled) + pad
         activationBLOB['CustomHeader']['pSizes'].append(dword)
 
-        properties += marshaled + b'\xFA'*pad
+        properties += marshaled + b'\x00'*pad
 
         # ServerLocation
         locationInfo = LocationInfoData()
@@ -1750,7 +1748,7 @@ class IRemoteSCMActivator:
         dword['Data'] = len(marshaled) + pad
         activationBLOB['CustomHeader']['pSizes'].append(dword)
 
-        properties += marshaled + b'\xFA'*pad
+        properties += marshaled + b'\x00'*pad
 
         activationBLOB['Property'] = properties
 
@@ -1875,7 +1873,7 @@ class IRemoteSCMActivator:
         activationBLOB['CustomHeader']['pSizes'].append(dword)
         instantiationInfo['thisSize'] = dword['Data']
 
-        properties += marshaled + b'\xFA'*pad
+        properties += marshaled + b'\x00'*pad
 
         # ActivationContextInfoData
         activationInfo = ActivationContextInfoData()
@@ -1888,7 +1886,7 @@ class IRemoteSCMActivator:
         dword['Data'] = len(marshaled) + pad
         activationBLOB['CustomHeader']['pSizes'].append(dword)
 
-        properties += marshaled + b'\xFA'*pad
+        properties += marshaled + b'\x00'*pad
 
         # ServerLocation
         locationInfo = LocationInfoData()
@@ -1913,7 +1911,7 @@ class IRemoteSCMActivator:
         dword['Data'] = len(marshaled) + pad
         activationBLOB['CustomHeader']['pSizes'].append(dword)
 
-        properties += marshaled + b'\xFA'*pad
+        properties += marshaled + b'\x00'*pad
 
         activationBLOB['Property'] = properties
 
