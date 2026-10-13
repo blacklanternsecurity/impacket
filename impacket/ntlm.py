@@ -740,6 +740,13 @@ def getNTLMSSPType3(type1, type2, user, password, domain, lmhash = '', nthash = 
 
     if version is not None:
         ntlmChallengeResponse['Version'] = version
+    elif responseFlags & NTLMSSP_NEGOTIATE_VERSION:
+        # Type 1 set the VERSION flag, so Type 3 must include a VERSION too
+        v = VERSION()
+        v['ProductMajorVersion'] = 10
+        v['ProductMinorVersion'] = 0
+        v['ProductBuild'] = 19045
+        ntlmChallengeResponse['Version'] = v
     ntlmChallengeResponse['ntlm'] = ntResponse
     if encryptedRandomSessionKey is not None: 
         ntlmChallengeResponse['session_key'] = encryptedRandomSessionKey
