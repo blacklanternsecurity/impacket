@@ -1615,7 +1615,7 @@ class IActivation:
         request['Clsid'] = clsId
         request['pwszObjectName'] = NULL
         request['pObjectStorage'] = NULL
-        request['ClientImpLevel'] = 2
+        #request['ClientImpLevel'] = 2
         request['Mode'] = 0
         request['Interfaces'] = 1
 
@@ -1738,7 +1738,7 @@ class IRemoteSCMActivator:
         # ScmRequestInfo
         scmInfo = ScmRequestInfoData()
         scmInfo['pdwReserved'] = NULL
-        scmInfo['remoteRequest']['ClientImpLevel'] = 2
+        #scmInfo['remoteRequest']['ClientImpLevel'] = 2
         scmInfo['remoteRequest']['cRequestedProtseqs'] = 1
         scmInfo['remoteRequest']['pRequestedProtseqs'].append(7)
 
@@ -1901,7 +1901,7 @@ class IRemoteSCMActivator:
         # ScmRequestInfo
         scmInfo = ScmRequestInfoData()
         scmInfo['pdwReserved'] = NULL
-        scmInfo['remoteRequest']['ClientImpLevel'] = 2
+        #scmInfo['remoteRequest']['ClientImpLevel'] = 2
         scmInfo['remoteRequest']['cRequestedProtseqs'] = 1
         scmInfo['remoteRequest']['pRequestedProtseqs'].append(7)
 
