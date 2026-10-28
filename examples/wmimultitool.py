@@ -37,7 +37,9 @@
 from __future__ import division
 from __future__ import print_function
 import sys
+import os
 import re
+import json
 import argparse
 import logging
 
@@ -1083,6 +1085,184 @@ class FileOps:
             print('[-] chmod failed: %s' % e)
             return False
 
+    def _serialize_ace(self, ace):
+        """Serialize a Win32_ACE WMI object to a JSON-safe dict."""
+        entry = {
+            'AccessMask': int(ace.AccessMask),
+            'AceFlags': int(ace.AceFlags),
+            'AceType': int(ace.AceType),
+        }
+        trustee = ace.Trustee
+        entry['Trustee'] = {}
+        for attr in ('Name', 'Domain', 'SIDString'):
+            val = getattr(trustee, attr, None)
+            if val is not None:
+                entry['Trustee'][attr] = str(val)
+        sid_array = getattr(trustee, 'SID', None)
+        if sid_array is not None:
+            try:
+                entry['Trustee']['SID'] = list(sid_array)
+            except (TypeError, ValueError):
+                pass
+        return entry
+
+    def _serialize_trustee(self, trustee):
+        """Serialize a Win32_Trustee owner/group to a JSON-safe dict."""
+        info = {}
+        for attr in ('Name', 'Domain', 'SIDString'):
+            val = getattr(trustee, attr, None)
+            if val is not None:
+                info[attr] = str(val)
+        sid_array = getattr(trustee, 'SID', None)
+        if sid_array is not None:
+            try:
+                info['SID'] = list(sid_array)
+            except (TypeError, ValueError):
+                pass
+        return info
+
+    def get_sd(self, filepath):
+        """Read the current security descriptor (owner + DACL) and return it as a dict."""
+        filepath_escaped = filepath.replace('\\', '\\\\')
+        path = "Win32_LogicalFileSecuritySetting.Path='%s'" % filepath_escaped
+        try:
+            sec_obj, _ = self.__iWbemServices.GetObject(path)
+            result = sec_obj.GetSecurityDescriptor()
+            ret = result.ReturnValue
+            if ret != 0:
+                print('[-] GetSecurityDescriptor returned: %d' % ret)
+                return None
+
+            sd = result.Descriptor
+            backup = {
+                'filepath': filepath,
+                'ControlFlags': int(sd.ControlFlags),
+            }
+
+            owner = getattr(sd, 'Owner', None)
+            if owner is not None:
+                backup['Owner'] = self._serialize_trustee(owner)
+
+            group = getattr(sd, 'Group', None)
+            if group is not None:
+                backup['Group'] = self._serialize_trustee(group)
+
+            dacl = getattr(sd, 'DACL', None)
+            if dacl is not None:
+                backup['DACL'] = [self._serialize_ace(ace) for ace in dacl]
+
+            return backup
+        except Exception as e:
+            print('[-] get_sd failed: %s' % e)
+            return None
+
+    def set_sd(self, filepath, backup):
+        """Restore a security descriptor (owner + DACL) from a backup dict."""
+        filepath_escaped = filepath.replace('\\', '\\\\')
+        path = "Win32_LogicalFileSecuritySetting.Path='%s'" % filepath_escaped
+        try:
+            sec_obj, _ = self.__iWbemServices.GetObject(path)
+            result = sec_obj.GetSecurityDescriptor()
+            ret = result.ReturnValue
+            if ret != 0:
+                print('[-] GetSecurityDescriptor returned: %d (cannot restore)' % ret)
+                return False
+
+            sd = result.Descriptor
+
+            trustee_cls, _ = self.__iWbemServices.GetObject('Win32_Trustee')
+            ace_cls, _ = self.__iWbemServices.GetObject('Win32_ACE')
+
+            # Restore owner
+            if 'Owner' in backup:
+                owner_info = backup['Owner']
+                owner_trustee = trustee_cls.SpawnInstance()
+                if 'SIDString' in owner_info:
+                    owner_trustee.SIDString = owner_info['SIDString']
+                if 'Name' in owner_info:
+                    owner_trustee.Name = owner_info['Name']
+                if 'Domain' in owner_info:
+                    owner_trustee.Domain = owner_info['Domain']
+                if 'SID' in owner_info:
+                    owner_trustee.SID = owner_info['SID']
+                sd.Owner = owner_trustee
+
+            # Restore group
+            if 'Group' in backup:
+                group_info = backup['Group']
+                group_trustee = trustee_cls.SpawnInstance()
+                if 'SIDString' in group_info:
+                    group_trustee.SIDString = group_info['SIDString']
+                if 'Name' in group_info:
+                    group_trustee.Name = group_info['Name']
+                if 'Domain' in group_info:
+                    group_trustee.Domain = group_info['Domain']
+                if 'SID' in group_info:
+                    group_trustee.SID = group_info['SID']
+                sd.Group = group_trustee
+
+            # Restore DACL
+            if 'DACL' in backup:
+                restored_aces = []
+                for ace_info in backup['DACL']:
+                    ace = ace_cls.SpawnInstance()
+                    ace.AccessMask = ace_info['AccessMask']
+                    ace.AceFlags = ace_info['AceFlags']
+                    ace.AceType = ace_info['AceType']
+
+                    t_info = ace_info.get('Trustee', {})
+                    trustee = trustee_cls.SpawnInstance()
+                    if 'SIDString' in t_info:
+                        trustee.SIDString = t_info['SIDString']
+                    if 'Name' in t_info:
+                        trustee.Name = t_info['Name']
+                    if 'Domain' in t_info:
+                        trustee.Domain = t_info['Domain']
+                    if 'SID' in t_info:
+                        trustee.SID = t_info['SID']
+                    ace.Trustee = trustee
+                    restored_aces.append(ace)
+                sd.DACL = restored_aces
+
+            # Restore ControlFlags
+            if 'ControlFlags' in backup:
+                sd.ControlFlags = backup['ControlFlags']
+
+            result = sec_obj.SetSecurityDescriptor(sd)
+            ret = result.ReturnValue
+            if ret == 0:
+                owner_str = backup.get('Owner', {}).get('SIDString', 'unknown')
+                print('[+] Security descriptor restored: %s (owner: %s)' % (filepath, owner_str))
+            else:
+                print('[-] SetSecurityDescriptor returned: %d' % ret)
+                if ret == 2:
+                    print('    (2 = Access Denied — caller may lack SeRestorePrivilege)')
+            return ret == 0
+        except Exception as e:
+            print('[-] set_sd failed: %s' % e)
+            return False
+
+    def save_sd_backup(self, filepath, backup, outfile):
+        """Save a security descriptor backup dict to a local JSON file."""
+        try:
+            with open(outfile, 'w') as f:
+                json.dump(backup, f, indent=2)
+            print('[*] Security descriptor backed up to: %s' % outfile)
+            return True
+        except Exception as e:
+            print('[-] Failed to save backup: %s' % e)
+            return False
+
+    def load_sd_backup(self, infile):
+        """Load a security descriptor backup dict from a local JSON file."""
+        try:
+            with open(infile, 'r') as f:
+                backup = json.load(f)
+            return backup
+        except Exception as e:
+            print('[-] Failed to load backup: %s' % e)
+            return None
+
 
 # ---------------------------------------------------------------------------
 # Share operations (Win32_Share, root/cimv2)
@@ -1340,8 +1520,29 @@ class WMIMultiTool:
         elif opts.file_action == 'delete':
             ops.delete(opts.path)
         elif opts.file_action == 'takeown':
+            # Back up the original SD before mutating
+            outfile = getattr(opts, 'sd_backup', None)
+            if outfile is None:
+                # Auto-generate a backup filename from the target path
+                safe_name = opts.path.replace('\\', '_').replace(':', '').replace('/', '_').strip('_')
+                outfile = '%s.sd.json' % safe_name
+            backup = ops.get_sd(opts.path)
+            if backup:
+                ops.save_sd_backup(opts.path, backup, outfile)
+            else:
+                print('[!] Could not read original SD — proceeding without backup')
             if ops.takeown(opts.path):
                 ops.chmod(opts.path)
+        elif opts.file_action == 'restore':
+            infile = opts.sd_file
+            backup = ops.load_sd_backup(infile)
+            if backup is None:
+                return
+            target_path = getattr(opts, 'path', None) or backup.get('filepath')
+            if not target_path:
+                logging.error('No target path — specify -path or use a backup that contains one')
+                return
+            ops.set_sd(target_path, backup)
 
     def _dispatch_share(self, iWbemServices):
         opts = self.__options
@@ -1549,9 +1750,19 @@ if __name__ == '__main__':
     p.add_argument('-path', required=True, help='File path to delete')
 
     p = file_sub.add_parser('takeown',
-        help='Take ownership + set Administrators Full Control DACL (pure WMI, no subprocess)')
+        help='Take ownership + set Administrators Full Control DACL (backs up original SD first)')
     p.add_argument('-path', required=True,
         help='File path (e.g. C:\\Windows\\System32\\appmgmts.dll)')
+    p.add_argument('-sd-backup', dest='sd_backup', metavar='FILE',
+        help='Local file to save the original security descriptor to '
+             '(default: auto-generated from the target path)')
+
+    p = file_sub.add_parser('restore',
+        help='Restore a previously backed-up security descriptor (owner + DACL)')
+    p.add_argument('-sd-file', dest='sd_file', required=True, metavar='FILE',
+        help='Local JSON file from a previous takeown backup')
+    p.add_argument('-path',
+        help='Override the target file path (default: path stored in the backup)')
 
     # ===================== share =====================
     share_parser = subparsers.add_parser('share',
