@@ -1304,8 +1304,7 @@ if __name__ == '__main__':
         else:
             required_params = [
                 (options.request, "-request"),
-                (options.aesKey, "-aesKey"),
-                (options.nthash, "-nthash"),
+                (options.aesKey or options.nthash, "-aesKey or -nthash"),
                 (options.domain, "-domain"),
                 (options.user, "-user"),
                 (options.password or options.hashes, "-password or -hashes"),
