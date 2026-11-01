@@ -758,6 +758,111 @@ class ESENT_DB:
         else:
             return None
 
+    def __buildLongValueIndex(self, table, maxPages=2000000):
+        # Build (once, lazily) an index of a table's long-value B-tree so separated long
+        # values can be resolved by their LID without walking the tree on every lookup.
+        # We store each segment's *location* (pageNum, tagNum) rather than its bytes, so
+        # the index stays small regardless of how much long-value data the table holds;
+        # the handful of segments actually needed are read on demand in __resolveLongValue.
+        # Layout: { lidInt: [totalSize, { offset: (pageNum, tagNum) }] }.
+        cached = table.get('LVIndex')
+        if cached is not None:
+            return cached
+        index = {}
+        if not table['LongValues']:
+            table['LVIndex'] = index
+            return index
+        lvEntry = list(table['LongValues'].values())[0]
+        ddh = ESENT_DATA_DEFINITION_HEADER(lvEntry['EntryData'])
+        cat = ESENT_CATALOG_DATA_DEFINITION_ENTRY(lvEntry['EntryData'][len(ddh):])
+        seen = set()
+        stack = [cat['FatherDataPageNumber']]
+        pagesRead = 0
+        while stack:
+            pageNum = stack.pop()
+            if pageNum in seen:
+                continue
+            seen.add(pageNum)
+            pagesRead += 1
+            if pagesRead > maxPages:
+                LOG.debug('Long value index: page cap (%d) reached, index may be incomplete' % maxPages)
+                break
+            page = self.getPage(pageNum)
+            isLeaf = (page.record['PageFlags'] & FLAGS_LEAF) > 0
+            try:
+                commonKey = page.getTag(0)[1]
+            except Exception:
+                commonKey = b''
+            for tagNum in page.iterDataTagNums():
+                flags, data = page.getTag(tagNum)
+                if not isLeaf:
+                    stack.append(ESENT_BRANCH_ENTRY(flags, data)['ChildPageNumber'])
+                    continue
+                if (page.record['PageFlags'] & FLAGS_LONG_VALUE) == 0:
+                    continue
+                leafEntry = ESENT_LEAF_ENTRY(flags, data)
+                if flags & TAG_COMMON > 0:
+                    key = commonKey[:leafEntry['CommonPageKeySize']] + leafEntry['LocalPageKey']
+                else:
+                    key = leafEntry['LocalPageKey']
+                if len(key) == 4:
+                    # LV header entry: the total data size is stored in the value itself.
+                    lid = unpack('>L', key)[0]
+                    ed = leafEntry['EntryData']
+                    if len(ed) >= 8:
+                        total = unpack('<L', ed[4:8])[0]
+                    elif len(ed) >= 4:
+                        total = unpack('<L', ed[:4])[0]
+                    else:
+                        total = None
+                    index.setdefault(lid, [None, {}])[0] = total
+                elif len(key) == 8:
+                    # LV data segment: key = LID (big-endian) + offset (big-endian).
+                    lid = unpack('>L', key[:4])[0]
+                    offset = unpack('>L', key[4:8])[0]
+                    index.setdefault(lid, [None, {}])[1][offset] = (pageNum, tagNum)
+        table['LVIndex'] = index
+        return index
+
+    def __resolveLongValue(self, table, lid):
+        # Resolve a separated long value from the (lazily built) index, reading only the
+        # segments for this LID. Returns the reassembled bytes, or None if the LID is
+        # unknown or carries no data segments (callers fall back to the raw reference).
+        index = self.__buildLongValueIndex(table)
+        if not index:
+            return None
+        if isinstance(lid, int):
+            lidInt = lid
+        elif isinstance(lid, (bytes, bytearray)) and len(lid) >= 4:
+            # getNextRow hands the LID back little-endian; the tree keys it big-endian.
+            lidInt = unpack('<L', bytes(lid[:4]))[0]
+        else:
+            return None
+        entry = index.get(lidInt)
+        if entry is None:
+            return None
+        total, segs = entry
+        if not segs:
+            return None
+        out = b''
+        for offset in sorted(segs):
+            pageNum, tagNum = segs[offset]
+            flags, data = self.getPage(pageNum).getTag(tagNum)
+            out += ESENT_LEAF_ENTRY(flags, data)['EntryData']
+        if total is not None and 0 < total <= len(out):
+            out = out[:total]
+        return out
+
+    def getLongValue(self, tableName, lid):
+        # Resolve a separated ESE long value by its LID reference (the small value a Long
+        # Binary/Text column stores inline when its data lives outside the record). Uses a
+        # lazily built, per-table index. Returns the reassembled bytes, or None.
+        if isinstance(tableName, bytes) is not True:
+            tableName = b(tableName)
+        if tableName not in self.__tables:
+            return None
+        return self.__resolveLongValue(self.__tables[tableName], lid)
+
     def __getNextTag(self, cursor):
         page = cursor['CurrentPageData']
 
@@ -918,7 +1023,19 @@ class ESENT_DB:
                         itemFlag = 0
 
                     #print "ID: %d, itemFlag: 0x%x" %( columnRecord['Identifier'], itemFlag)
-                    if itemFlag & (TAGGED_DATA_TYPE_COMPRESSED ):
+                    if itemFlag & TAGGED_DATA_TYPE_STORED:
+                        # Separated long value: the inline bytes are a 4-byte LID that
+                        # points at the real data stored in the table's long-value tree.
+                        # Resolve it transparently; on any failure fall back to the raw
+                        # reference so behavior is never worse than not resolving at all.
+                        lidRef = tag[offsetItem:][:itemSize]
+                        resolved = None
+                        try:
+                            resolved = self.__resolveLongValue(cursor['TableData'], lidRef)
+                        except Exception as e:
+                            LOG.debug('Long value resolution failed for column %s: %s' % (column, e))
+                        record[column] = resolved if resolved is not None else lidRef
+                    elif itemFlag & (TAGGED_DATA_TYPE_COMPRESSED ):
                         LOG.error('Unsupported tag column: %s, flag:0x%x' % (column, itemFlag))
                         record[column] = None
                     elif itemFlag & TAGGED_DATA_TYPE_MULTI_VALUE:

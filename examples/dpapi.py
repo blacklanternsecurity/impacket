@@ -91,6 +91,159 @@ class DPAPI:
             logging.error('Cannot grab MachineKey/UserKey from LSA, aborting...')
             sys.exit(1)
 
+    def backupkeysOffline(self):
+        # Extract the domain DPAPI backup key from an NTDS.DIT offline (no DC connection).
+        # Mirrors the live BACKUPKEYS output, but reads the BCKUPKEY_* secret objects from
+        # the database and decrypts them with the PEK derived from the SYSTEM bootkey. The
+        # preferred (RSA) key lives in NTDS as a separated long value, so this depends on
+        # impacket.ese resolving long values.
+        import hashlib
+        from Cryptodome.Cipher import ARC4
+        from impacket.ese import ESENT_DB
+        from impacket.examples.secretsdump import NTDSHashes, CryptoCommon
+
+        if self.options.bootkey:
+            bootKey = unhexlify(self.options.bootkey.removeprefix("0x"))
+        elif self.options.system:
+            bootKey = LocalOperations(self.options.system).getBootKey()
+        else:
+            logging.error('Offline backupkeys requires -system <SYSTEM hive> or -bootkey <hex>')
+            return
+
+        cc = CryptoCommon()
+
+        def derivePeks(peklist):
+            enc = NTDSHashes.PEKLIST_ENC(peklist)
+            peks = []
+            if enc['Header'][:4] == b'\x02\x00\x00\x00':
+                # RC4 (legacy)
+                md5 = hashlib.new('md5')
+                md5.update(bootKey)
+                for _ in range(1000):
+                    md5.update(enc['KeyMaterial'])
+                decrypted = NTDSHashes.PEKLIST_PLAIN(ARC4.new(md5.digest()).encrypt(enc['EncryptedPek']))
+                keySize = len(NTDSHashes.PEK_KEY())
+                for i in range(len(decrypted['DecryptedPek']) // keySize):
+                    peks.append(NTDSHashes.PEK_KEY(decrypted['DecryptedPek'][i*keySize:(i+1)*keySize])['Key'])
+            else:
+                # AES (modern)
+                decrypted = NTDSHashes.PEKLIST_PLAIN(cc.decryptAES(bootKey, enc['EncryptedPek'], enc['KeyMaterial']))
+                data = decrypted['DecryptedPek']
+                i = 0
+                while i + 20 <= len(data):
+                    peks.append(data[i+4:i+20])
+                    i += 20
+            return peks
+
+        def decryptSecret(peks, blob):
+            cb = NTDSHashes.CRYPTED_BLOB(blob)
+            pek = peks[struct.unpack('<L', cb['Header'][4:8])[0]]
+            if cb['Header'][:4] == b'\x13\x00\x00\x00':
+                plainLen = struct.unpack('<L', cb['EncryptedHash'][:4])[0]
+                return cc.decryptAES(pek, cb['EncryptedHash'][4:], cb['KeyMaterial'])[:plainLen]
+            md5 = hashlib.new('md5')
+            md5.update(pek)
+            md5.update(cb['KeyMaterial'])
+            return ARC4.new(md5.digest()).encrypt(cb['EncryptedHash'])
+
+        def toRaw(value):
+            # NTDS binary columns come back as ascii-hex; normalize to raw bytes.
+            if value is None:
+                return None
+            if isinstance(value, (bytes, bytearray)):
+                try:
+                    return unhexlify(value)
+                except Exception:
+                    return bytes(value)
+            return value
+
+        # Walk datatable once, collecting the pekList and every BCKUPKEY_* secret object.
+        db = ESENT_DB(self.options.ntds)
+        try:
+            cursor = db.openTable('datatable')
+            peklist = None
+            bckupkeys = {}
+            while True:
+                record = db.getNextRow(cursor)
+                if record is None:
+                    break
+                if peklist is None:
+                    pek = record.get(b'ATTk590689')
+                    if pek:
+                        peklist = toRaw(pek)
+                name = record.get(b'ATTm3')
+                if isinstance(name, (bytes, bytearray)):
+                    name = name.decode('utf-16-le', 'replace')
+                if name and 'BCKUPKEY' in name.upper():
+                    value = toRaw(record.get(b'ATTk589851'))
+                    # Only keep populated secrets: a forest-root NTDS can also contain
+                    # empty/tombstoned BCKUPKEY phantoms (incl. child-domain keys) whose
+                    # currentValue is empty; those must not shadow the real object.
+                    if value:
+                        bckupkeys[name.strip().lower()] = value
+        finally:
+            db.close()
+
+        if peklist is None:
+            logging.error('Could not locate the Password Encryption Key (pekList) in %s' % self.options.ntds)
+            return
+        peks = derivePeks(peklist)
+
+        found = False
+        for pointerName in ('bckupkey_preferred secret', 'bckupkey_p secret'):
+            pointer = bckupkeys.get(pointerName)
+            if not pointer:
+                continue
+            guid = bin_to_string(decryptSecret(peks, pointer)).lower()
+            secretBlob = bckupkeys.get('bckupkey_{} secret'.format(guid))
+            if not secretBlob:
+                logging.error('Backup key object for GUID %s not found in NTDS' % guid)
+                continue
+            secret = decryptSecret(peks, secretBlob)
+            outName = 'G$BCKUPKEY_{}'.format(guid)
+            keyVersion = struct.unpack('<L', secret[:4])[0]
+
+            if keyVersion == 1:  # legacy key
+                backup_key = P_BACKUP_KEY(secret)
+                backupkey = backup_key['Data']
+                if self.options.export:
+                    logging.debug("Exporting key to file {}".format(outName + ".key"))
+                    open(outName + ".key", 'wb').write(backupkey)
+                else:
+                    print("Legacy key (%s):" % guid)
+                    print("0x%s" % hexlify(backupkey).decode('latin-1'))
+                    print("\n")
+                found = True
+
+            elif keyVersion == 2:  # preferred key
+                backup_key = PREFERRED_BACKUP_KEY(secret)
+                pvk = backup_key['Data'][:backup_key['KeyLength']]
+                cert = backup_key['Data'][backup_key['KeyLength']:backup_key['KeyLength'] + backup_key['CertificateLength']]
+
+                header = PVK_FILE_HDR()
+                header['dwMagic'] = 0xb0b5f11e
+                header['dwVersion'] = 0
+                header['dwKeySpec'] = 1
+                header['dwEncryptType'] = 0
+                header['cbEncryptData'] = 0
+                header['cbPvk'] = backup_key['KeyLength']
+                backupkey_pvk = header.getData() + pvk
+
+                if self.options.export:
+                    logging.debug("Exporting certificate to file {}".format(outName + ".der"))
+                    open(outName + ".der", 'wb').write(cert)
+                    logging.debug("Exporting private key to file {}".format(outName + ".pvk"))
+                    open(outName + ".pvk", 'wb').write(backupkey_pvk)
+                else:
+                    print("Preferred key (%s):" % guid)
+                    header.dump()
+                    print("PRIVATEKEYBLOB:{%s}" % (hexlify(backupkey_pvk).decode('latin-1')))
+                    print("\n")
+                found = True
+
+        if not found:
+            logging.error('No usable BCKUPKEY objects were recovered from %s' % self.options.ntds)
+
     def run(self):
         if self.options.action.upper() == 'MASTERKEY':
             fp = open(options.file, 'rb')
@@ -311,6 +464,14 @@ class DPAPI:
 
         # credit to @gentilkiwi
         elif self.options.action.upper() == 'BACKUPKEYS':
+            # ---- Offline mode: extract the domain backup key straight from an NTDS.DIT ----
+            # (+ SYSTEM hive or -bootkey), with no DC connection. The preferred (RSA 2048)
+            # key is stored in NTDS as a separated ESE long value, so this relies on the
+            # long-value support in impacket.ese to recover it in full.
+            if self.options.ntds is not None:
+                self.backupkeysOffline()
+                return
+
             domain, username, password, address = parse_target(self.options.target)
 
             if password == '' and username != '' and self.options.hashes is None and self.options.no_pass is False and self.options.aesKey is None:
@@ -556,7 +717,7 @@ if __name__ == '__main__':
 
     # A domain backup key command
     backupkeys = subparsers.add_parser('backupkeys', help='domain backup key related functions')
-    backupkeys.add_argument('-t', '--target', action='store', required=True, help='[[domain/]username[:password]@]<targetName or address>')
+    backupkeys.add_argument('-t', '--target', action='store', required=False, help='[[domain/]username[:password]@]<targetName or address> (live mode)')
     backupkeys.add_argument('-hashes', action="store", metavar = "LMHASH:NTHASH", help='NTLM hashes, format is LMHASH:NTHASH')
     backupkeys.add_argument('-no-pass', action="store_true", help='don\'t ask for password (useful for -k)')
     backupkeys.add_argument('-k', action="store_true", required=False, help='Use Kerberos authentication. Grabs credentials from ccache file '
@@ -567,6 +728,10 @@ if __name__ == '__main__':
     backupkeys.add_argument('-dc-ip', action='store',metavar = "ip address", help='IP Address of the domain controller. '
                        'If omitted it will use the domain part (FQDN) specified in the target parameter')
     backupkeys.add_argument('--export', action='store_true', required=False, help='export keys to file')
+    # Offline mode: extract the domain backup key directly from an NTDS.DIT (no DC needed).
+    backupkeys.add_argument('-ntds', action='store', help='(offline) NTDS.DIT to extract the domain backup key from')
+    backupkeys.add_argument('-system', action='store', help='(offline) SYSTEM hive, used to compute the bootkey for -ntds')
+    backupkeys.add_argument('-bootkey', action='store', help='(offline) bootkey/SYSKEY in hex, instead of -system')
 
     # A masterkey command
     masterkey = subparsers.add_parser('masterkey', help='masterkey related functions')
