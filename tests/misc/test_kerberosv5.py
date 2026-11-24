@@ -8,7 +8,7 @@ from impacket.krb5 import constants
 from impacket.krb5.asn1 import AP_REP, AS_REP, EncAPRepPart, TGS_REQ, seq_set
 from impacket.krb5.crypto import Key, _enctype_table
 from impacket.krb5.gssapi import GSSAPI
-from impacket.krb5.kerberosv5 import DEFAULT_TGS_ENCTYPES, RC4_PREFERRED_TGS_ENCTYPES, KerberosError, \
+from impacket.krb5.kerberosv5 import DEFAULT_TGS_ENCTYPES, KERBEROS_TYPE1_MECH_TYPES, RC4_PREFERRED_TGS_ENCTYPES, KerberosError, \
     getKerberosTGS, getKerberosTGSRequestEnctypes, getKerberosType3
 from impacket.krb5.types import KerberosTime, Principal
 from impacket.spnego import SPNEGO_NegTokenInit, SPNEGO_NegTokenResp, TypesMech
@@ -139,7 +139,7 @@ class KerberosType3Tests(TestCase):
         _, new_session_key, last_leg = getKerberosType3(cipher, session_key, server_token.getData())
 
         neg_token_init = SPNEGO_NegTokenInit()
-        neg_token_init["MechTypes"] = [TypesMech["MS KRB5 - Microsoft Kerberos 5"]]
+        neg_token_init["MechTypes"] = KERBEROS_TYPE1_MECH_TYPES
         expected_mic = GSSAPI(cipher).GSS_GetMIC(acceptor_subkey, neg_token_init.getMechTypesDER(), 0, pad=False)
         self.assertEqual(new_session_key.contents, acceptor_subkey.contents)
         self.assertTrue(last_leg.endswith(expected_mic))
