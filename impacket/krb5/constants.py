@@ -134,8 +134,6 @@ class PreAuthenticationDataTypes(Enum):
     PA_REDHAT_PASSKEY          = 153
     KERB_KEY_LIST_REQ          = 161
     KERB_KEY_LIST_REP          = 162
-    PA_REQ_ENC_PA_REP          = 149
-    PA_AS_FRESHNESS            = 150
     PA_SUPPORTED_ENCTYPES      = 165
     PA_EXTENDED_ERROR          = 166
     PA_PAC_OPTIONS             = 167
