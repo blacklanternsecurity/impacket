@@ -44,7 +44,7 @@ from impacket.spnego import SPNEGO_NegTokenInit, SPNEGO_NegTokenResp, SPNEGOCiph
 import contextlib
 
 try:
-    from OpenSSL import SSL
+    from OpenSSL import SSL, crypto
 except:
     LOG.critical("pyOpenSSL is not installed, can't continue")
     raise
